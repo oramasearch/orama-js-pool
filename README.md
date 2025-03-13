@@ -1,5 +1,7 @@
 # Orama JS Pool
 
+[![Rust](https://github.com/oramasearch/orama-js-pool/actions/workflows/ci.yml/badge.svg)](https://github.com/oramasearch/orama-js-pool/actions/workflows/ci.yml)
+
 This crate allows you to create a pool of JavaScript engines using the [Deno](https://deno.land/) runtime.
 Internally, it uses the [deno_core](https://crates.io/crates/deno_core) crate to create the engines. Only some `extensions` are enabled by default.
 
