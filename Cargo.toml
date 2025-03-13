@@ -1,5 +1,5 @@
 [package]
-name = "orama_js_pool"
+name = "orama-js-pool"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0"

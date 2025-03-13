@@ -45,7 +45,9 @@ pub enum JSExecutorError {
     #[error("Unable to deserialize the result: {0}")]
     DeserializationError(#[from] deno_core::serde_v8::Error),
     #[error("Domain not allowed: {0}")]
-    DomainDenied(deno_core::error::JsError),
+    HTTPDomainDenied(deno_core::error::JsError),
+    #[error("Serde error: {0}")]
+    Serialization(#[from] serde_json::Error),
 }
 
 #[derive(Debug, Clone)]
@@ -165,11 +167,11 @@ impl<Input: IntoFunctionParameters, Output: serde::de::DeserializeOwned + 'stati
 import main from "{MAIN_IMPORT_MODULE_NAME}";
 globalThis.{GLOBAL_VARIABLE_NAME} = 0;
 if (typeof main !== 'object') {{
-globalThis.{GLOBAL_VARIABLE_NAME} = 1;
+    globalThis.{GLOBAL_VARIABLE_NAME} = 1;
 }} else if (!main.{function_name}) {{
-globalThis.{GLOBAL_VARIABLE_NAME} = 2;
+    globalThis.{GLOBAL_VARIABLE_NAME} = 2;
 }} else if (typeof main.{function_name} !== 'function') {{
-globalThis.{GLOBAL_VARIABLE_NAME} = 3;
+    globalThis.{GLOBAL_VARIABLE_NAME} = 3;
 }}
 "#,
         );
@@ -223,10 +225,11 @@ globalThis.{GLOBAL_VARIABLE_NAME} = 3;
 
         let await_keyword = if self.is_async { "await" } else { "" };
         let params = params.into_function_parameter().0;
+        let arguments = serde_json::to_string(&params).map_err(JSExecutorError::Serialization)?;
         let code = format!(
             r#"
 import main from "{MAIN_IMPORT_MODULE_NAME}";
-globalThis.{GLOBAL_VARIABLE_NAME} = {await_keyword} main.{}(...{params:?});
+globalThis.{GLOBAL_VARIABLE_NAME} = {await_keyword} main.{}(...{arguments});
 "#,
             &self.function_name
         );
@@ -245,7 +248,7 @@ globalThis.{GLOBAL_VARIABLE_NAME} = {await_keyword} main.{}(...{params:?});
                         .exception_message
                         .contains(DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING) && error.exception_message.contains("which cannot be granted in this environment") =>
                 {
-                    JSExecutorError::DomainDenied(error)
+                    JSExecutorError::HTTPDomainDenied(error)
                 }
                 CoreError::Js(error) => JSExecutorError::ErrorThrown(error),
                 _ => JSExecutorError::UnknownExecutionError(err),
@@ -262,15 +265,6 @@ globalThis.{GLOBAL_VARIABLE_NAME} = {await_keyword} main.{}(...{params:?});
         Ok(output)
     }
 
-    fn update_channel_storage(&mut self, handler: Option<Box<dyn FnMut(Output) + 'static>>) {
-        let rc_state = self.js_runtime.op_state();
-        let mut rc_state_ref = rc_state.borrow_mut();
-        let state = &mut *rc_state_ref;
-        state.put(ChannelStorage { handler });
-        drop(rc_state_ref);
-        drop(rc_state);
-    }
-
     /// Attention: the handler is called sync with the JS code
     pub async fn exec_stream<F>(&mut self, params: Input, handler: F) -> Result<(), JSExecutorError>
     where
@@ -284,10 +278,11 @@ globalThis.{GLOBAL_VARIABLE_NAME} = {await_keyword} main.{}(...{params:?});
         self.update_channel_storage(Some(Box::new(handler)));
 
         let params = params.into_function_parameter().0;
+        let arguments = serde_json::to_string(&params).map_err(JSExecutorError::Serialization)?;
         let code = format!(
             r#"
 import main from "{MAIN_IMPORT_MODULE_NAME}";
-const generator = main.{}(...{params:?});
+const generator = main.{}(...{arguments});
 for await (const value of generator) {{
     Deno.core.ops.send_data_to_channel(value);
 }}
@@ -309,7 +304,7 @@ for await (const value of generator) {{
                         .exception_message
                         .contains(DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING) && error.exception_message.contains("which cannot be granted in this environment") =>
                 {
-                    JSExecutorError::DomainDenied(error)
+                    JSExecutorError::HTTPDomainDenied(error)
                 }
                 CoreError::Js(error) => JSExecutorError::ErrorThrown(error),
                 _ => JSExecutorError::UnknownExecutionError(err),
@@ -326,6 +321,15 @@ for await (const value of generator) {{
         Ok(())
     }
 
+    fn update_channel_storage(&mut self, handler: Option<Box<dyn FnMut(Output) + 'static>>) {
+        let rc_state = self.js_runtime.op_state();
+        let mut rc_state_ref = rc_state.borrow_mut();
+        let state = &mut *rc_state_ref;
+        state.put(ChannelStorage { handler });
+        drop(rc_state_ref);
+        drop(rc_state);
+    }
+
     async fn inner_exec<F, F2>(
         js_runtime: &mut deno_core::JsRuntime,
         specifier: &ModuleSpecifier,
@@ -339,6 +343,11 @@ for await (const value of generator) {{
         F: FnOnce(deno_core::error::CoreError) -> JSExecutorError,
         F2: FnOnce(deno_core::error::CoreError) -> JSExecutorError,
     {
+        trace!(
+            "Loading module. Specifier: {:?} code: {}",
+            specifier.to_file_path(),
+            code
+        );
         let mod_id = js_runtime
             .load_side_es_module_from_code(specifier, code)
             .await
@@ -350,6 +359,8 @@ for await (const value of generator) {{
             js_runtime.run_event_loop(Default::default()),
         )
         .await;
+
+        trace!("Loaded module. Specifier: {:?}", specifier.to_file_path());
 
         match timeout_result {
             Err(_) => {
@@ -425,6 +436,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
     use tokio::time::sleep;
 
     use super::*;
@@ -457,7 +469,7 @@ export default { myFunction: zz };
     }
 
     #[tokio::test]
-    async fn test_fixed_json_compatibility() {
+    async fn test_fixed_input_json_compatibility() {
         let config = JSExecutorConfig {
             allowed_hosts: vec![],
             max_execution_time: Duration::from_secs(2),
@@ -481,6 +493,61 @@ export default { myFunction: zz };
         let output: i32 = executor.exec(vec![1, 2, 3]).await.unwrap();
 
         assert_eq!(output, 6);
+    }
+
+    #[tokio::test]
+    async fn test_fixed_input_json_compatibility_map() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let config = JSExecutorConfig {
+            allowed_hosts: vec![],
+            max_execution_time: Duration::from_secs(2),
+            max_startup_time: Duration::from_millis(300),
+            function_name: "myFunction".to_string(),
+            is_async: false,
+        };
+
+        let mut executor = JSExecutor::try_new(
+            config.clone(),
+            r#"
+function zz(doc) {
+    return doc.title || ''
+}
+export default { myFunction: zz };
+"#
+            .to_string(),
+        )
+        .await
+        .unwrap();
+
+        let output: String = executor
+            .exec(json!({
+                "title": "pippo",
+            }))
+            .await
+            .unwrap();
+        assert_eq!(output, "pippo".to_string());
+
+        let mut executor = JSExecutor::try_new(
+            config,
+            r#"
+function zz(doc) {
+    return doc.title || ''
+}
+export default { myFunction: zz };
+"#
+            .to_string(),
+        )
+        .await
+        .unwrap();
+
+        let output: String = executor
+            .exec(vec![json!({
+                "title": "pippo",
+            })])
+            .await
+            .unwrap();
+        assert_eq!(output, "pippo".to_string());
     }
 
     #[tokio::test]
@@ -547,7 +614,7 @@ export default { myFunction: zz };
         .unwrap();
         let output: Result<Todo, JSExecutorError> = executor.exec(vec![1]).await;
         let err = output.unwrap_err();
-        assert!(matches!(err, JSExecutorError::DomainDenied(_)));
+        assert!(matches!(err, JSExecutorError::HTTPDomainDenied(_)));
     }
 
     #[tokio::test]

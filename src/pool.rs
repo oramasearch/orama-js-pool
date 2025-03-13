@@ -195,22 +195,18 @@ fn start_loop<I: Input, O: Output>(
                     break;
                 }
                 Action::ExecStream(item_stream) => {
-                    println!("Received exec stream action");
                     let ItemStream { input, sender } = item_stream;
                     let err = inner_exec_stream(&mut executor, input, move |v| {
-                        println!("Sending value: {:?}", v);
                         if let Err(err) = sender.send(v) {
                             warn!("Error sending reply: {:?}", err);
                         }
                     })
                     .await;
 
-                    println!("Stream ended: {:?}", err);
-
                     match err {
                         Ok(_) => {}
                         Err(err) => {
-                            info!("Stopping the loop due to JS error: {:?}", err);
+                            warn!("Stopping the loop due to JS error: {:?}", err);
                             break;
                         }
                     };
@@ -228,9 +224,9 @@ fn start_loop<I: Input, O: Output>(
                             };
                         }
                         Err(err) => {
+                            warn!("Stopping the loop due to JS error: {:?}", err);
                             match item.oneshot.send(Err(err)) {
                                 Ok(_) => {
-                                    info!("Stopping the loop due to JS error");
                                     break;
                                 }
                                 Err(err) => {
