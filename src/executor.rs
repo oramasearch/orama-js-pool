@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use deno_web::BlobStore;
 
-use crate::orama_extension::orama_extension;
+use crate::orama_extension::{orama_extension, ChannelStorage};
 use crate::permission::{CustomPermissions, DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING};
 
 deno_core::extension!(deno_telemetry, esm = ["telemetry.ts", "util.ts"],);
@@ -80,7 +80,9 @@ impl<Input: IntoFunctionParameters, Output: serde::de::DeserializeOwned> Debug
     }
 }
 
-impl<Input: IntoFunctionParameters, Output: serde::de::DeserializeOwned> JSExecutor<Input, Output> {
+impl<Input: IntoFunctionParameters, Output: serde::de::DeserializeOwned + 'static>
+    JSExecutor<Input, Output>
+{
     pub async fn try_new<Code: Into<ModuleCodeString>>(
         config: JSExecutorConfig,
         code: Code,
@@ -100,9 +102,12 @@ impl<Input: IntoFunctionParameters, Output: serde::de::DeserializeOwned> JSExecu
                 deno_fetch::deno_fetch::init_ops::<CustomPermissions>(
                     deno_fetch::Options::default(),
                 ),
-                orama_extension::init_ops(CustomPermissions {
-                    allowed_hosts: config.allowed_hosts,
-                }),
+                orama_extension::init_ops(
+                    CustomPermissions {
+                        allowed_hosts: config.allowed_hosts,
+                    },
+                    ChannelStorage::<Output> { handler: None },
+                ),
             ],
             startup_snapshot: Some(RUNTIME_SNAPSHOT),
             ..Default::default()
@@ -154,7 +159,7 @@ impl<Input: IntoFunctionParameters, Output: serde::de::DeserializeOwned> JSExecu
         function_name: &String,
     ) -> Result<(), JSExecutorError> {
         // This cannot fail
-        let specifier = ModuleSpecifier::parse(&"file:/0").unwrap();
+        let specifier = ModuleSpecifier::parse("file:/0").unwrap();
         let code = format!(
             r#"
 import main from "{MAIN_IMPORT_MODULE_NAME}";
@@ -182,7 +187,7 @@ globalThis.{GLOBAL_VARIABLE_NAME} = 3;
                         .exception_message
                         .contains("does not provide an export named 'default'") =>
                 {
-                    return JSExecutorError::NoDefaultExport;
+                    JSExecutorError::NoDefaultExport
                 }
                 _ => JSExecutorError::BadCode(e),
             },
@@ -231,7 +236,7 @@ globalThis.{GLOBAL_VARIABLE_NAME} = {await_keyword} main.{}(...{params:?});
             &mut self.js_runtime,
             &specifier,
             code,
-            self.max_execution_time.clone(),
+            self.max_execution_time,
             JSExecutorError::BadCode,
             |err| match err {
                 CoreError::Js(error)
@@ -257,6 +262,70 @@ globalThis.{GLOBAL_VARIABLE_NAME} = {await_keyword} main.{}(...{params:?});
         Ok(output)
     }
 
+    fn update_channel_storage(&mut self, handler: Option<Box<dyn FnMut(Output) + 'static>>) {
+        let rc_state = self.js_runtime.op_state();
+        let mut rc_state_ref = rc_state.borrow_mut();
+        let state = &mut *rc_state_ref;
+        state.put(ChannelStorage { handler });
+        drop(rc_state_ref);
+        drop(rc_state);
+    }
+
+    /// Attention: the handler is called sync with the JS code
+    pub async fn exec_stream<F>(&mut self, params: Input, handler: F) -> Result<(), JSExecutorError>
+    where
+        F: FnMut(Output) + 'static,
+    {
+        self.exec_count += 1;
+        // Never fails because the format is correct
+        let specifier = ModuleSpecifier::parse(&format!("file:/{}", self.exec_count)).unwrap();
+
+        // Set the handler
+        self.update_channel_storage(Some(Box::new(handler)));
+
+        let params = params.into_function_parameter().0;
+        let code = format!(
+            r#"
+import main from "{MAIN_IMPORT_MODULE_NAME}";
+const generator = main.{}(...{params:?});
+for await (const value of generator) {{
+    Deno.core.ops.send_data_to_channel(value);
+}}
+"#,
+            self.function_name
+        );
+
+        debug!("Executing code");
+        Self::inner_exec(
+            &mut self.js_runtime,
+            &specifier,
+            code,
+            self.max_execution_time,
+            JSExecutorError::BadCode,
+            |err| match err {
+                CoreError::Js(error)
+                // This check is not perfect, but it is good enough
+                    if error
+                        .exception_message
+                        .contains(DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING) && error.exception_message.contains("which cannot be granted in this environment") =>
+                {
+                    JSExecutorError::DomainDenied(error)
+                }
+                CoreError::Js(error) => JSExecutorError::ErrorThrown(error),
+                _ => JSExecutorError::UnknownExecutionError(err),
+            },
+            JSExecutorError::ExecTimeout,
+        )
+        .await?;
+
+        // This is needed to drop the handler correctly
+        // So, if the handler holds a reference to something, it can be dropped
+        // An example is the mpsc::Sender: the blow code is needed to drop the sender
+        self.update_channel_storage(None);
+
+        Ok(())
+    }
+
     async fn inner_exec<F, F2>(
         js_runtime: &mut deno_core::JsRuntime,
         specifier: &ModuleSpecifier,
@@ -277,7 +346,7 @@ globalThis.{GLOBAL_VARIABLE_NAME} = {await_keyword} main.{}(...{params:?});
         let result = js_runtime.mod_evaluate(mod_id);
 
         let timeout_result = tokio::time::timeout(
-            timeout_duration.clone(),
+            timeout_duration,
             js_runtime.run_event_loop(Default::default()),
         )
         .await;
@@ -313,6 +382,12 @@ globalThis.{GLOBAL_VARIABLE_NAME} = {await_keyword} main.{}(...{params:?});
 }
 
 pub struct FunctionParameters(Vec<serde_json::Value>);
+
+impl Default for FunctionParameters {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl FunctionParameters {
     pub fn new() -> Self {
@@ -350,6 +425,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use tokio::time::sleep;
+
     use super::*;
 
     #[tokio::test]
@@ -581,6 +658,58 @@ export default { myFunction: 42 };
         .await;
         let err = executor.unwrap_err();
         assert!(matches!(err, JSExecutorError::ExportedElementNotAFunction));
+    }
+
+    #[tokio::test]
+    async fn test_fixed_async_generator_async() {
+        let config = JSExecutorConfig {
+            // Permission denied
+            allowed_hosts: vec![],
+            max_execution_time: Duration::from_secs(2),
+            max_startup_time: Duration::from_millis(300),
+            function_name: "myFunction".to_string(),
+            is_async: true,
+        };
+
+        let mut executor: JSExecutor<Vec<i32>, String> = JSExecutor::try_new(
+            config,
+            r#"
+async function* zz(id) {
+    yield `${id++}`;
+    yield `${id++}`;
+    yield `${id++}`;
+}
+export default { myFunction: zz };
+"#
+            .to_string(),
+        )
+        .await
+        .unwrap();
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        executor
+            .exec_stream(vec![1], move |v| {
+                tx.send(v).unwrap();
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            rx.recv().await.unwrap(),
+            serde_json::Value::String("1".to_string())
+        );
+        assert_eq!(
+            rx.recv().await.unwrap(),
+            serde_json::Value::String("2".to_string())
+        );
+        assert_eq!(
+            rx.recv().await.unwrap(),
+            serde_json::Value::String("3".to_string())
+        );
+
+        sleep(Duration::from_millis(200)).await;
+
+        assert!(rx.is_closed());
     }
 
     #[derive(serde::Deserialize, PartialEq, Eq, Debug)]

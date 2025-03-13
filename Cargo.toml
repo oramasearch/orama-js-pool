@@ -20,11 +20,10 @@ deno_url = "0.194.0"
 deno_web = "0.225.0"
 deno_webidl = "0.194.0"
 serde = "1"
-serde_json = "1.0.140"
+serde_json = "1"
 sha2 = "0.10.8"
 thiserror = "2.0.12"
-tokio = { version = "1.44.0", features = ["time", "rt"] }
-
+tokio = { version = "1", features = ["time", "rt"] }
 tracing = "0.1"
 
 [build-dependencies]
@@ -38,6 +37,10 @@ deno_telemetry = "0.16.0"
 deno_url = "0.194.0"
 deno_web = "0.225.0"
 deno_webidl = "0.194.0"
+serde = "1"
+serde_json = "1"
+tokio = { version = "1", features = ["time", "rt"] }
+tracing = "0.1"
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }

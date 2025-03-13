@@ -8,7 +8,11 @@ use std::{
 };
 
 use thiserror::Error;
-use tokio::{runtime::Builder, sync::oneshot, task::LocalSet};
+use tokio::{
+    runtime::Builder,
+    sync::{mpsc, oneshot},
+    task::LocalSet,
+};
 use tracing::{debug, info, warn};
 
 use crate::executor::{IntoFunctionParameters, JSExecutor, JSExecutorConfig, JSExecutorError};
@@ -39,12 +43,18 @@ pub enum JSExecutorPoolError<Input, Output> {
 
 pub enum Action<Input, Output> {
     Exec(Item<Input, Output>),
+    ExecStream(ItemStream<Input, Output>),
     Close,
 }
 
 pub struct Item<Input, Output> {
     input: Input,
     oneshot: oneshot::Sender<Result<Output, JSExecutorPoolError<Input, Output>>>,
+}
+
+pub struct ItemStream<Input, Output> {
+    input: Input,
+    sender: mpsc::UnboundedSender<Output>,
 }
 
 #[derive(Clone)]
@@ -120,6 +130,26 @@ impl<I: Input, O: Output> JSExecutorPool<I, O> {
         rx.await.map_err(JSExecutorPoolError::ReplyError)?
     }
 
+    pub async fn exec_stream(
+        &self,
+        input: I,
+    ) -> Result<mpsc::UnboundedReceiver<O>, JSExecutorPoolError<I, O>> {
+        if self.is_closed.load(Ordering::Relaxed) {
+            return Err(JSExecutorPoolError::ShuttingDown);
+        }
+
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let send_result = self
+            .sender
+            .send(Action::ExecStream(ItemStream { input, sender }))
+            .await;
+        if let Err(err) = send_result {
+            return Err(JSExecutorPoolError::ChannelError(err));
+        }
+
+        Ok(receiver)
+    }
+
     pub async fn close(self) -> Result<(), JSExecutorPoolError<I, O>> {
         self.is_closed.store(true, Ordering::Relaxed);
         self.sender
@@ -159,34 +189,56 @@ fn start_loop<I: Input, O: Output>(
 
         debug!("Starting receiver items");
         while let Ok(action) = r.recv_blocking() {
-            let item = match action {
+            match action {
                 Action::Close => {
                     info!("Received close action");
                     break;
                 }
-                Action::Exec(item) => item,
-            };
-            match inner_exec(&mut executor, item.input).await {
-                Ok(output) => {
-                    match item.oneshot.send(Ok(output)) {
-                        Ok(_) => continue,
-                        Err(err) => {
+                Action::ExecStream(item_stream) => {
+                    println!("Received exec stream action");
+                    let ItemStream { input, sender } = item_stream;
+                    let err = inner_exec_stream(&mut executor, input, move |v| {
+                        println!("Sending value: {:?}", v);
+                        if let Err(err) = sender.send(v) {
                             warn!("Error sending reply: {:?}", err);
-                            info!("Stopping the loop due to channel error");
+                        }
+                    })
+                    .await;
+
+                    println!("Stream ended: {:?}", err);
+
+                    match err {
+                        Ok(_) => {}
+                        Err(err) => {
+                            info!("Stopping the loop due to JS error: {:?}", err);
                             break;
                         }
                     };
                 }
-                Err(err) => {
-                    match item.oneshot.send(Err(err)) {
-                        Ok(_) => {
-                            info!("Stopping the loop due to JS error");
-                            break;
+                Action::Exec(item) => {
+                    match inner_exec(&mut executor, item.input).await {
+                        Ok(output) => {
+                            match item.oneshot.send(Ok(output)) {
+                                Ok(_) => continue,
+                                Err(err) => {
+                                    warn!("Error sending reply: {:?}", err);
+                                    info!("Stopping the loop due to channel error");
+                                    break;
+                                }
+                            };
                         }
                         Err(err) => {
-                            warn!("Error sending reply: {:?}", err);
-                            info!("Stopping the loop due to channel error");
-                            break;
+                            match item.oneshot.send(Err(err)) {
+                                Ok(_) => {
+                                    info!("Stopping the loop due to JS error");
+                                    break;
+                                }
+                                Err(err) => {
+                                    warn!("Error sending reply: {:?}", err);
+                                    info!("Stopping the loop due to channel error");
+                                    break;
+                                }
+                            };
                         }
                     };
                 }
@@ -207,9 +259,25 @@ async fn inner_exec<I: Input, O: Output>(
         .map_err(JSExecutorPoolError::ExecutionError)
 }
 
+async fn inner_exec_stream<I: Input, O: Output, F>(
+    executor: &mut JSExecutor<I, O>,
+    input: I,
+    handler: F,
+) -> Result<(), JSExecutorPoolError<I, O>>
+where
+    F: FnMut(O) + 'static,
+{
+    executor
+        .exec_stream(input, handler)
+        .await
+        .map_err(JSExecutorPoolError::ExecutionError)
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
+
+    use tokio::time::sleep;
 
     use super::*;
 
@@ -243,6 +311,47 @@ export default { myFunction };
 
             assert_eq!(output, i);
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_pool_stream() {
+        let pool: JSExecutorPool<i32, String> = JSExecutorPool::new(
+            JSExecutorPoolConfig {
+                instances_count_per_code: 1,
+                queue_capacity: 1,
+                executor_config: JSExecutorConfig {
+                    allowed_hosts: vec![],
+                    max_execution_time: Duration::from_secs(1),
+                    max_startup_time: Duration::from_millis(300),
+                    function_name: "myFunction".to_string(),
+                    is_async: true,
+                },
+            },
+            r#"
+async function* myFunction(a) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    yield `${a++}`;
+    await new Promise(resolve => setTimeout(resolve, 100));
+    yield `${a++}`;
+    await new Promise(resolve => setTimeout(resolve, 100));
+    yield `${a++}`;
+}
+export default { myFunction };
+"#
+            .to_string(),
+        )
+        .await
+        .unwrap();
+
+        let mut rec = pool.exec_stream(1).await.unwrap();
+
+        assert_eq!(rec.recv().await.unwrap(), "1".to_string());
+        assert_eq!(rec.recv().await.unwrap(), "2".to_string());
+        assert_eq!(rec.recv().await.unwrap(), "3".to_string());
+
+        sleep(Duration::from_millis(300)).await;
+
+        assert!(rec.is_closed());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]

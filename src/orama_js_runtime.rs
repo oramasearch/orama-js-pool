@@ -7,7 +7,7 @@ use std::{
 
 use tokio::{
     pin, select,
-    sync::{oneshot, RwLock},
+    sync::{mpsc, oneshot, RwLock},
     task::JoinHandle,
 };
 use tracing::{info, trace};
@@ -21,6 +21,7 @@ pub struct OramaJSPoolConfig {
 }
 
 struct OramaJSPoolInner<Input, Output> {
+    #[allow(clippy::type_complexity)]
     pools: HashMap<
         Vec<u8>,
         (
@@ -114,12 +115,9 @@ impl<I: Input, O: Output> OramaJSPool<I, O> {
         }
 
         let pool = lock.pools.get(&id);
-        match pool {
-            Some(p) => {
-                *p.1.lock().unwrap() = Instant::now();
-                return p.0.exec(input).await;
-            }
-            None => {}
+        if let Some(p) = pool {
+            *p.1.lock().unwrap() = Instant::now();
+            return p.0.exec(input).await;
         };
         drop(lock);
 
@@ -128,12 +126,9 @@ impl<I: Input, O: Output> OramaJSPool<I, O> {
         let mut lock = self.inner.write().await;
         let pool = lock.pools.get(&id);
         // Concurrent write: avoid insert the pool twice
-        match pool {
-            Some(p) => {
-                *p.1.lock().unwrap() = Instant::now();
-                return p.0.exec(input).await;
-            }
-            None => {}
+        if let Some(p) = pool {
+            *p.1.lock().unwrap() = Instant::now();
+            return p.0.exec(input).await;
         };
         let executor = JSExecutorPool::new(self.pool_config.clone(), code.to_string()).await?;
         lock.pools
@@ -155,17 +150,64 @@ impl<I: Input, O: Output> OramaJSPool<I, O> {
         };
     }
 
-    pub async fn close(self) -> Result<(), JSExecutorPoolError<I, O>> {
-        println!("Closing pool");
-        self.shutdown_tx.send(()).unwrap();
-        println!("Waiting for handler");
-        self.handler.await.unwrap();
-        /*
-        let inner = self.inner.into_inner();
-        for (_, pool) in inner.pools {
-            pool.0.close().await?;
+    pub async fn execute_stream(
+        &self,
+        code: &str,
+        input: I,
+    ) -> Result<mpsc::UnboundedReceiver<O>, JSExecutorPoolError<I, O>> {
+        let id = sha256_digest(code);
+
+        trace!("Executing code with id: {:?}", id);
+        let lock = self.inner.read().await;
+
+        if lock.closed {
+            return Err(JSExecutorPoolError::ShuttingDown);
         }
-        */
+
+        let pool = lock.pools.get(&id);
+        if let Some(p) = pool {
+            *p.1.lock().unwrap() = Instant::now();
+            return p.0.exec_stream(input).await;
+        };
+        drop(lock);
+
+        info!("Creating new pool for code with id: {:?}", id);
+
+        let mut lock = self.inner.write().await;
+        let pool = lock.pools.get(&id);
+        // Concurrent write: avoid insert the pool twice
+        if let Some(p) = pool {
+            *p.1.lock().unwrap() = Instant::now();
+            return p.0.exec_stream(input).await;
+        };
+        let executor = JSExecutorPool::new(self.pool_config.clone(), code.to_string()).await?;
+        lock.pools
+            .insert(id.clone(), (executor, Mutex::new(Instant::now())));
+        self.count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        drop(lock);
+
+        let lock = self.inner.read().await;
+        let pool = lock.pools.get(&id);
+        match pool {
+            Some(p) => {
+                *p.1.lock().unwrap() = Instant::now();
+                return p.0.exec_stream(input).await;
+            }
+            None => {
+                panic!("Pool not found");
+            }
+        };
+    }
+
+    pub async fn close(self) -> Result<(), JSExecutorPoolError<I, O>> {
+        self.shutdown_tx.send(()).unwrap();
+        self.handler.await.unwrap();
+
+        let mut inner = self.inner.write().await;
+        for (_, (pool, _)) in inner.pools.drain() {
+            pool.close().await?;
+        }
 
         Ok(())
     }
@@ -279,7 +321,58 @@ export default { m };
         runtime.close().await.unwrap();
 
         assert_eq!(counter.load(Ordering::Relaxed), 0);
+    }
 
-        sleep(Duration::from_millis(600)).await;
+    #[tokio::test]
+    async fn test_pool_stream() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let runtime: OramaJSPool<i32, u8> = OramaJSPool::new(OramaJSPoolConfig {
+            pool_config: JSExecutorPoolConfig {
+                instances_count_per_code: 1,
+                queue_capacity: 1,
+                executor_config: JSExecutorConfig {
+                    allowed_hosts: vec![],
+                    max_startup_time: Duration::from_millis(200),
+                    max_execution_time: Duration::from_millis(1_000),
+                    function_name: "m".to_string(),
+                    is_async: true,
+                },
+            },
+            max_idle_time: Duration::from_millis(300),
+            check_interval: Duration::from_millis(60_000),
+        });
+
+        assert_eq!(runtime.len(), 0);
+
+        let code1 = r#"
+async function* m(a) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    yield a;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    yield a + 1;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    yield a + 2;
+}
+export default { m };
+"#;
+
+        let mut result = runtime.execute_stream(code1, 1).await.unwrap();
+
+        assert_eq!(runtime.len(), 1);
+
+        assert_eq!(result.recv().await.unwrap(), 1);
+        assert_eq!(result.recv().await.unwrap(), 2);
+        assert_eq!(result.recv().await.unwrap(), 3);
+
+        sleep(Duration::from_millis(100)).await;
+
+        assert!(result.is_closed());
+
+        let counter = runtime.count.clone();
+
+        runtime.close().await.unwrap();
+
+        assert_eq!(counter.load(Ordering::Relaxed), 0);
     }
 }

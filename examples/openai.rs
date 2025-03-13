@@ -4,7 +4,7 @@ use orama_js_pool::{JSExecutorConfig, JSExecutorPoolConfig, OramaJSPool, OramaJS
 
 // Ths code is generated building `open_ai_js_example` code
 // and replace `./openai.js` content with the `open_ai_js_example/dist/openai.js` one
-static CODE: &'static str = include_str!("./openai.js");
+static CODE: &str = include_str!("./openai.js");
 
 #[tokio::main]
 async fn main() {
