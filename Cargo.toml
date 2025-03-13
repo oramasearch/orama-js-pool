@@ -1,6 +1,6 @@
 [package]
 name = "orama-js-pool"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
 license = "AGPL-3.0"
 description = "Create a pool of JavaScript engines to invoke JavaScript code concurrently."
@@ -12,6 +12,11 @@ authors = [
 documentation = "https://docs.rs/orama-js-pool"
 repository = "https://github.com/oramasearch/orama-js-pool"
 homepage = "https://crates.io/crates/orama-js-pool"
+
+exclude = [
+    "open_ai_js_example/*",
+    ".github/*",
+]
 
 [lib]
 name         = "orama_js_pool"
