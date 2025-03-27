@@ -10,7 +10,7 @@ use tokio::{
     sync::{mpsc, oneshot, RwLock},
     task::JoinHandle,
 };
-use tracing::{info, trace};
+use tracing::{error, info, trace};
 
 use crate::pool::{Input, JSExecutorPool, JSExecutorPoolConfig, JSExecutorPoolError, Output};
 
@@ -228,7 +228,16 @@ impl<I: Input, O: Output> OramaJSPool<I, O> {
 
         let removed_elements = to_remove.len();
         for id in to_remove {
-            inner.pools.remove(&id);
+            if let Some(r) = inner.pools.remove(&id) {
+                match r.0.close().await {
+                    Ok(_) => {
+                        info!("Closed pool for code with id: {:?}", id);
+                    }
+                    Err(e) => {
+                        error!("Error closing pool for code with id: {:?}: {:?}", id, e);
+                    }
+                }
+            }
         }
 
         removed_elements
