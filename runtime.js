@@ -10,6 +10,8 @@ import "ext:deno_web/13_message_port.js"
 import "ext:deno_web/15_performance.js"
 import "ext:deno_web/14_compression.js"
 
+import "ext:orama_extension/runtime.js"
+
 // The following lines are copied from deno_core repository
 // See: https://github.com/denoland/deno/blob/5c8d894aa3858e8aa8130b7d2058033a0c7de539/runtime/js/98_global_scope_shared.js
 // That code is licensed under MIT license
@@ -38,6 +40,13 @@ import * as webidl from "ext:deno_webidl/00_webidl.js";
 import { DOMException } from "ext:deno_web/01_dom_exception.js";
 import * as abortSignal from "ext:deno_web/03_abort_signal.js";
 import * as imageData from "ext:deno_web/16_image_data.js";
+
+// This is changed !!!
+// We don't want to color the STDOUT/STDERR because we could send it to HTTP...
+console.setNoColorFns(
+    () => true,
+    () => true,
+)
 
 const windowOrWorkerGlobalScope = {
     AbortController: core.propNonEnumerable(abortSignal.AbortController),
@@ -112,7 +121,10 @@ const windowOrWorkerGlobalScope = {
     clearInterval: core.propWritable(timers.clearInterval),
     clearTimeout: core.propWritable(timers.clearTimeout),
     console: core.propNonEnumerable(
-        new console.Console((msg, level) => core.print(msg, level > 1)),
+        // This is changed!!!!!
+        new console.Console((msg, level) => {
+            return Deno.core.ops.op_stream_to_oramacore_print(msg, level > 1)
+        }),
     ),
     fetch: core.propWritable(fetch.fetch),
     EventSource: core.propWritable(eventSource.EventSource),

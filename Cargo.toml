@@ -14,8 +14,8 @@ repository = "https://github.com/oramasearch/orama-js-pool"
 homepage = "https://crates.io/crates/orama-js-pool"
 
 exclude = [
-    "open_ai_js_example/*",
-    ".github/*",
+  "open_ai_js_example/*",
+  ".github/*",
 ]
 
 [lib]
@@ -57,5 +57,6 @@ tokio = { version = "1", features = ["time", "rt"] }
 tracing = "0.1"
 
 [dev-dependencies]
+axum = "0.8.4"
 serde = { version = "1", features = ["derive"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }

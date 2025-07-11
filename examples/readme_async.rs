@@ -1,6 +1,5 @@
+use orama_js_pool::{ExecOption, JSPoolExecutor, JSRunnerError};
 use std::time::Duration;
-
-use orama_js_pool::{JSExecutorConfig, JSExecutorPoolConfig, OramaJSPool, OramaJSPoolConfig};
 
 static CODE_ASYNC_SUM: &str = r#"
 async function async_sum(a, b) {
@@ -11,27 +10,31 @@ export default { async_sum };
 "#;
 
 #[tokio::main]
-async fn main() {
-    let pool = OramaJSPool::new(OramaJSPoolConfig {
-        pool_config: JSExecutorPoolConfig {
-            instances_count_per_code: 2,
-            queue_capacity: 10,
-            executor_config: JSExecutorConfig {
-                allowed_hosts: vec![],
-                max_startup_time: std::time::Duration::from_millis(200),
-                max_execution_time: std::time::Duration::from_millis(200),
-                function_name: "async_sum".to_string(),
-                is_async: true,
+async fn main() -> Result<(), JSRunnerError> {
+    // Create a pool with 10 JS engines, running the code above
+    let pool = JSPoolExecutor::<Vec<u8>, u8>::new(
+        CODE_ASYNC_SUM.to_string(),
+        10,                         // number of engines
+        None,                       // no http domain restriction on startup
+        Duration::from_millis(200), // startup timeout
+        true,                       // is_async
+        "async_sum".to_string(),    // function name to call
+    )
+    .await?;
+
+    let params = vec![1, 2];
+    let result = pool
+        .exec(
+            params, // input parameter
+            None,   // no stdout stream (set to Some(...) to capture stdout/stderr)
+            ExecOption {
+                timeout: Duration::from_millis(200), // timeout
+                allowed_hosts: None,
             },
-        },
-        max_idle_time: Duration::from_secs(60),
-        check_interval: Duration::from_secs(1),
-    });
+        )
+        .await?;
 
-    let output: u8 = pool.execute(CODE_ASYNC_SUM, vec![1, 2]).await.unwrap();
-    println!("async_sum(1, 2) == {}", output);
-    assert_eq!(output, 3);
-
-    // Close all pools
-    pool.close().await.unwrap();
+    println!("async_sum(1, 2) == {}", result);
+    assert_eq!(result, 3);
+    Ok(())
 }

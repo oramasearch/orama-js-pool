@@ -2,83 +2,15 @@
 
 [![Rust](https://github.com/oramasearch/orama-js-pool/actions/workflows/ci.yml/badge.svg)](https://github.com/oramasearch/orama-js-pool/actions/workflows/ci.yml)
 
-This crate allows you to create a pool of JavaScript engines using the [Deno](https://deno.land/) runtime.
-Internally, it uses the [deno_core](https://crates.io/crates/deno_core) crate to create the engines. Only some `extensions` are enabled by default.
+Orama JS Pool provides a pool of JavaScript engines (using the Deno runtime via [deno_core](https://crates.io/crates/deno_core)) for running JavaScript code from Rust. It is designed for high-throughput, parallel, and optionally sandboxed execution of JS functions, supporting both sync and async workflows.
 
-## Usage
+## Quickstart
 
-The pool is created one per code (it is used a sha256 hash of the code as identifier). This means that if you want to execute the same code with different arguments, the pool will be reused.
-
-```rust
-use std::time::Duration;
-
-use orama_js_pool::{JSExecutorConfig, JSExecutorPoolConfig, OramaJSPool, OramaJSPoolConfig};
-
-static CODE_SUM: &str = r#"
-function sum(a, b) {
-    return a + b
-}
-export default { sum };
-"#;
-
-static CODE_SUM_WITH_BUG: &str = r#"
-function sum(a, b) {
-    return 1 + a + b
-}
-export default { sum };
-"#;
-
-#[tokio::main]
-async fn main() {
-    let pool = OramaJSPool::new(OramaJSPoolConfig {
-        pool_config: JSExecutorPoolConfig {
-            instances_count_per_code: 2,
-            queue_capacity: 10,
-            executor_config: JSExecutorConfig {
-                allowed_hosts: vec![],
-                max_startup_time: std::time::Duration::from_millis(200),
-                max_execution_time: std::time::Duration::from_millis(200),
-                function_name: "sum".to_string(),
-                is_async: false,
-            },
-        },
-        // Close the pool if no activity for 60 seconds
-        max_idle_time: Duration::from_secs(60),
-        // Check every second if there are idle pools to close
-        check_interval: Duration::from_secs(1),
-    });
-
-    // Run CODE_SUM code and execute `sum` function with 1 and 2 as arguments.
-    // This starts a dedicated pool of workers (`instances_count_per_code`)
-    // to process requests in parallel and execute the code
-    let output: u8 = pool.execute(CODE_SUM, vec![1, 2]).await.unwrap();
-    println!("sum(1, 2) == {}", output);
-    assert_eq!(output, 3);
-
-    // Run CODE_SUM code and execute `sum` function with 3 and 4 as arguments.
-    // This time the computation will be more efficient because:
-    // - the pool is already started
-    // - the code is already loaded
-    let output: u8 = pool.execute(CODE_SUM, vec![3, 4]).await.unwrap();
-    println!("sum(3, 4) == {}", output);
-    assert_eq!(output, 7);
-
-    // Run CODE_SUM_2 starting a new dedicated pool of workers
-    let output: u8 = pool.execute(CODE_SUM_WITH_BUG, vec![1, 2]).await.unwrap();
-    println!("bugged code: sum(1, 2) == {}", output);
-    assert_eq!(output, 4);
-
-    // Close all pools
-    pool.close().await.unwrap();
-}
-```
-
-Orama JS Pool can run also async functions:
+Here's how to run an async JavaScript function using a pool of JS engines:
 
 ```rust
+use orama_js_pool::{ExecOption, JSPoolExecutor, JSRunnerError};
 use std::time::Duration;
-
-use orama_js_pool::{JSExecutorConfig, JSExecutorPoolConfig, OramaJSPool, OramaJSPoolConfig};
 
 static CODE_ASYNC_SUM: &str = r#"
 async function async_sum(a, b) {
@@ -89,91 +21,64 @@ export default { async_sum };
 "#;
 
 #[tokio::main]
-async fn main() {
-    let pool = OramaJSPool::new(OramaJSPoolConfig {
-        pool_config: JSExecutorPoolConfig {
-            instances_count_per_code: 2,
-            queue_capacity: 10,
-            executor_config: JSExecutorConfig {
-                allowed_hosts: vec![],
-                max_startup_time: std::time::Duration::from_millis(200),
-                max_execution_time: std::time::Duration::from_millis(200),
-                function_name: "async_sum".to_string(),
-                is_async: true,
+async fn main() -> Result<(), JSRunnerError> {
+    // Create a pool with 10 JS engines, running the code above
+    let pool = JSPoolExecutor::<Vec<u8>, u8>::new(
+        CODE_ASYNC_SUM.to_string(),
+        10,                         // number of engines
+        None,                       // no http domain restriction on startup
+        Duration::from_millis(200), // startup timeout
+        true,                       // is_async
+        "async_sum".to_string(),    // function name to call
+    )
+    .await?;
+
+    let params = vec![1, 2];
+    let result = pool
+        .exec(
+            params, // input parameter
+            None,   // no stdout stream (set to Some(...) to capture stdout/stderr)
+            ExecOption {
+                timeout: Duration::from_millis(200), // timeout
+                allowed_hosts: None,
             },
-        },
-        max_idle_time: Duration::from_secs(60),
-        check_interval: Duration::from_secs(1),
-    });
+        )
+        .await?;
 
-    let output: u8 = pool.execute(CODE_ASYNC_SUM, vec![1, 2]).await.unwrap();
-    println!("async_sum(1, 2) == {}", output);
-    assert_eq!(output, 3);
-
-    // Close all pools
-    pool.close().await.unwrap();
+    println!("async_sum(1, 2) == {}", result);
+    assert_eq!(result, 3);
+    Ok(())
 }
+
 ```
 
-Orama JS Pool handles also async iterators:
+## API Overview
 
-```rust
-use std::time::Duration;
+### `JSPoolExecutor`
+The main entry point. Manages a pool of JS engines for a given code string. Supports both sync and async JS functions.
+- `JSPoolExecutor::<Input, Output>::new(code, pool_size, allowed_hosts, startup_timeout, is_async, function_name)`
+- `exec(params, stdout_stream, ExecOption)` — runs the function with the given parameters. The second parameter is an optional stream to receive stdout/stderr output from the JS function.
 
-use orama_js_pool::{JSExecutorConfig, JSExecutorPoolConfig, OramaJSPool, OramaJSPoolConfig};
+**Stdout/Stderr Handling:**
+You can capture JavaScript `console.log` and `console.error` output by providing a stream (such as a broadcast channel sender) to the `stdout_stream` parameter of the `exec` method. This allows you to handle or redirect JS stdout/stderr as it is produced during execution. See `stream_console` example.
 
-static CODE_COUNT: &str = r#"
-async function* count(m, s) {
-    for (let i = 1; i <= m; i++) {
-        await new Promise((resolve) => setTimeout(resolve, s));
-        yield i;
-    }
-}
-export default { count };
-"#;
+### `ExecOption`
+Per-execution configuration:
+- `timeout`: Maximum execution time per call
+- `allowed_hosts`: Restrict HTTP access for the JS code (optional)
 
-#[tokio::main]
-async fn main() {
-    let pool: OramaJSPool<Vec<i32>, i32> = OramaJSPool::new(OramaJSPoolConfig {
-        pool_config: JSExecutorPoolConfig {
-            instances_count_per_code: 2,
-            queue_capacity: 10,
-            executor_config: JSExecutorConfig {
-                allowed_hosts: vec![],
-                max_startup_time: std::time::Duration::from_millis(200),
-                max_execution_time: std::time::Duration::from_millis(200),
-                function_name: "count".to_string(),
-                is_async: true,
-            },
-        },
-        // Close the pool if no activity for 60 seconds
-        max_idle_time: Duration::from_secs(60),
-        // Check every second if there are idle pools to close
-        check_interval: Duration::from_secs(1),
-    });
+### `JSRunnerError`
+All errors (startup, execution, JS exceptions) are reported as `JSRunnerError`.
 
-    let sleep_in_ms = 10;
-    let count_till = 10;
+## Features
+- **Parallel execution**: Multiple requests handled concurrently
+- **Async and sync JS support**: Run both types of JS functions
+- **Sandboxing**: Restrict network access via `allowed_hosts`
+- **Timeouts**: Prevent runaway scripts
+- **Typed input/output**: Use Rust types for parameters and results (via serde)
 
-    // Start the counting stream
-    let mut receiver = pool
-        .execute_stream(CODE_COUNT, vec![count_till, sleep_in_ms])
-        .await
-        .unwrap();
-
-    // iter on the expected output
-    for i in 0..count_till {
-        let output = receiver.recv().await.unwrap();
-        assert_eq!(output, i + 1);
-        println!("counting... {}", output);
-    }
-    // NB: the receiver is close here!!
-    println!("Done!");
-
-    // Close all pools
-    pool.close().await.unwrap();
-}
-```
+## Example: Streaming (if supported)
+If your JS function is an async generator, you can use streaming APIs (see crate docs for details).
 
 ## License
 

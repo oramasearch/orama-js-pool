@@ -32,12 +32,13 @@ jobs:
         restore-keys: cargo-
     - name: Check & Fmt & Clippy
       run: |
+        rustup component add rustfmt clippy
         cargo check
         cargo fmt -- --check
         cargo clippy
     - name: Test
       run: |
-        cargo test --all
+        cargo test --all --verbose
     - name: Build
       run: |
-        cargo build
+        cargo build --verbose
