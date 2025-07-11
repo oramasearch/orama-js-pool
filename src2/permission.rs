@@ -7,7 +7,7 @@ use deno_web::TimersPermission;
 pub const DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING: &str = "Domain not allowed";
 
 pub struct CustomPermissions {
-    pub allowed_hosts: Option<Vec<String>>,
+    pub allowed_hosts: Vec<String>,
 }
 
 impl TimersPermission for CustomPermissions {
@@ -75,27 +75,15 @@ impl FetchPermissions for CustomPermissions {
         url: &deno_core::url::Url,
         _api_name: &str,
     ) -> Result<(), deno_permissions::PermissionCheckError> {
-        let domain_with_port: Option<(String, &Vec<String>)> =
-            match (url.domain(), url.port(), self.allowed_hosts.as_ref()) {
-                (Some(domain), Some(port), Some(l)) => Some((format!("{domain}:{port}"), l)),
-                (Some(domain), None, Some(l)) => Some((domain.to_string(), l)),
-                (_, _, None) => return Ok(()),
-                _ => None,
-            };
-
-        if let Some((domain, list)) = domain_with_port {
-            let is_allowed = list.contains(&domain);
-            if is_allowed {
+        if let Some(domain) = url.domain() {
+            if self.allowed_hosts.contains(&domain.to_string()) {
                 return Ok(());
             }
         }
 
         Err(deno_permissions::PermissionCheckError::PermissionDenied(
             PermissionDeniedError::Fatal {
-                access: format!(
-                    "{}: {}. Allowed {:?}",
-                    DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING, url, self.allowed_hosts
-                ),
+                access: format!("{}: {}", DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING, url),
             },
         ))
     }

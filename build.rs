@@ -38,9 +38,12 @@ fn main() {
                     permission::CustomPermissions {
                         // During the snapshot build, no permissions are allowed
                         // NB: snapshot doesn't store the permissions, so this is just a dummy value
-                        allowed_hosts: vec![],
+                        allowed_hosts: Some(vec![]),
                     },
-                    orama_extension::ChannelStorage::<serde_json::Value> { handler: None },
+                    orama_extension::ChannelStorage::<serde_json::Value> {
+                        stream_handler: None,
+                    },
+                    orama_extension::StdoutHandler(None),
                 ),
             ],
             with_runtime_cb: None,
