@@ -2092,7 +2092,7 @@ dependencies = [
 
 [[package]]
 name = "orama-js-pool"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-channel",
  "axum 0.8.4",
