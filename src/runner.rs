@@ -344,6 +344,19 @@ if (typeof main !== 'object') {{
                             .await
                         {
                             Ok(mod_id) => mod_id,
+                            Err(CoreError::Js(e)) => {
+                                // No default export at all. Threated as `1`
+                                if e.name.as_ref() == Some(&"SyntaxError".to_string())
+                                    && e.message.as_ref().is_some_and(|s| {
+                                        s.contains("does not provide an export named 'default'")
+                                    })
+                                {
+                                    let _ = sender.send(1);
+                                    continue;
+                                }
+                                println!("QQ {e:?}");
+                                panic!("RR");
+                            }
                             Err(e) => {
                                 println!("NOOO {e:?}");
                                 panic!("QQQ");
@@ -717,7 +730,31 @@ export default { foo }
     }
 
     #[tokio::test]
-    async fn test_get_function_no_exported() {
+    async fn test_get_function_no_export() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let loaded_code = load_code::<String, String, String>(
+            r#"
+function foo(a) {}
+
+// export default { } No export at all
+            "#
+            .to_string(),
+            None,
+            Duration::from_millis(1_000),
+        )
+        .await
+        .unwrap();
+
+        let function = loaded_code.into_function(false, "foo".to_string()).await;
+
+        let err = function.err().unwrap();
+        println!("{err:?}");
+        assert!(matches!(err, JSRunnerError::DefaultExportIsNotAnObject));
+    }
+
+    #[tokio::test]
+    async fn test_get_function_no_exported_fn() {
         let _ = tracing_subscriber::fmt::try_init();
 
         let loaded_code = load_code::<String, String, String>(
