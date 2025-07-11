@@ -1,8 +1,8 @@
-use std::time::Duration;
-use std::sync::Arc;
-use orama_js_pool::{JSPoolExecutor, JSRunnerError, ExecOption, OutputChannel};
-use tokio::sync::broadcast;
+use orama_js_pool::{ExecOption, JSPoolExecutor, JSRunnerError, OutputChannel};
 use serde_json::json;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::broadcast;
 
 static CODE_LOG: &str = r#"
 function log_and_error(a) {
@@ -17,7 +17,7 @@ export default { log_and_error };
 async fn main() -> Result<(), JSRunnerError> {
     let pool = JSPoolExecutor::<serde_json::Value, usize>::new(
         CODE_LOG.to_string(),
-        2, // 2 executors
+        2,    // 2 executors
         None, // no http domain restriction
         Duration::from_millis(200),
         false, // not async
@@ -57,4 +57,4 @@ async fn main() -> Result<(), JSRunnerError> {
     tokio::time::sleep(Duration::from_millis(100)).await;
     drop(print_task); // End the print task
     Ok(())
-} 
+}

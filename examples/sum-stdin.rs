@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use orama_js_pool::{JSPoolExecutor, JSRunnerError, ExecOption};
+use orama_js_pool::{ExecOption, JSPoolExecutor, JSRunnerError};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 static CODE_SUM: &str = r#"
@@ -16,7 +16,7 @@ async fn main() -> Result<(), JSRunnerError> {
 
     let pool = JSPoolExecutor::<Vec<u8>, u8>::new(
         CODE_SUM.to_string(),
-        10, // 10 executors
+        10,   // 10 executors
         None, // no restriction on http domains
         Duration::from_millis(200),
         false, // is_async

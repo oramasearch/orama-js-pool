@@ -9,8 +9,8 @@ Orama JS Pool provides a pool of JavaScript engines (using the Deno runtime via 
 Here's how to run an async JavaScript function using a pool of JS engines:
 
 ```rust
+use orama_js_pool::{ExecOption, JSPoolExecutor, JSRunnerError};
 use std::time::Duration;
-use orama_js_pool::{JSPoolExecutor, JSRunnerError, ExecOption};
 
 static CODE_ASYNC_SUM: &str = r#"
 async function async_sum(a, b) {
@@ -25,27 +25,31 @@ async fn main() -> Result<(), JSRunnerError> {
     // Create a pool with 10 JS engines, running the code above
     let pool = JSPoolExecutor::<Vec<u8>, u8>::new(
         CODE_ASYNC_SUM.to_string(),
-        10, // number of engines
-        None, // no http domain restriction on startup
+        10,                         // number of engines
+        None,                       // no http domain restriction on startup
         Duration::from_millis(200), // startup timeout
-        true, // is_async
-        "async_sum".to_string(), // function name to call
-    ).await?;
+        true,                       // is_async
+        "async_sum".to_string(),    // function name to call
+    )
+    .await?;
 
     let params = vec![1, 2];
-    let result = pool.exec(
-        params, // input parameter
-        None, // no stdout stream (set to Some(...) to capture stdout/stderr)
-        ExecOption {
-            timeout: Duration::from_millis(200), // timeout
-            allowed_hosts: None,
-        },
-    ).await?;
+    let result = pool
+        .exec(
+            params, // input parameter
+            None,   // no stdout stream (set to Some(...) to capture stdout/stderr)
+            ExecOption {
+                timeout: Duration::from_millis(200), // timeout
+                allowed_hosts: None,
+            },
+        )
+        .await?;
 
     println!("async_sum(1, 2) == {}", result);
     assert_eq!(result, 3);
     Ok(())
 }
+
 ```
 
 ## API Overview

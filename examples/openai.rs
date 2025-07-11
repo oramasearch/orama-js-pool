@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use orama_js_pool::{JSPoolExecutor, JSRunnerError, ExecOption};
+use orama_js_pool::{ExecOption, JSPoolExecutor, JSRunnerError};
 
 // Ths code is generated building `open_ai_js_example` code
 // and replace `./openai.js` content with the `open_ai_js_example/dist/openai.js` one
@@ -13,7 +13,7 @@ async fn main() -> Result<(), JSRunnerError> {
 
     let pool = JSPoolExecutor::<Vec<String>, String>::new(
         CODE.to_string(),
-        10, // 10 executors
+        10,   // 10 executors
         None, // no http domain restriction on startup
         Duration::from_millis(200),
         true, // is_async
@@ -30,7 +30,7 @@ async fn main() -> Result<(), JSRunnerError> {
     let result = pool
         .exec(
             params,
-            None,  // no stdout stream (set to Some(...) to capture stdout/stderr)
+            None, // no stdout stream (set to Some(...) to capture stdout/stderr)
             ExecOption {
                 timeout: Duration::from_millis(5_000),
                 allowed_hosts: None,

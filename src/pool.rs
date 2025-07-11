@@ -86,7 +86,8 @@ mod tests {
         let js_code = r#"
             function addOne(x) { return x + 1; }
             export default { addOne };
-        "#.to_string();
+        "#
+        .to_string();
 
         let pool = JSPoolExecutor::<TestInput, i32>::new(
             js_code,
@@ -100,7 +101,14 @@ mod tests {
         .expect("Failed to create JSPoolExecutor");
 
         let result = pool
-            .exec(TestInput(41), None, ExecOption { timeout: Duration::from_secs(2), allowed_hosts: None })
+            .exec(
+                TestInput(41),
+                None,
+                ExecOption {
+                    timeout: Duration::from_secs(2),
+                    allowed_hosts: None,
+                },
+            )
             .await
             .expect("Execution failed");
 
