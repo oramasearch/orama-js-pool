@@ -195,7 +195,6 @@ impl<Input: TryIntoFunctionParameters, Output: DeserializeOwned + 'static>
 
         let output = match output {
             Err(_) => {
-                println!("WOOOOOOOO TIMED OUT");
                 self.timed_out = true;
                 self.handler.terminate_execution();
                 // timeout
@@ -316,7 +315,7 @@ pub async fn load_code<
 
             info!("Waiting for new events...");
             while let Some(ev) = receiver.recv().await {
-                debug!("## Received event...");
+                debug!("Received event...");
                 match ev {
                     LoadedCodeEvent::Stop => {
                         warn!("Stopping loop due to received command");
@@ -354,12 +353,10 @@ if (typeof main !== 'object') {{
                                     let _ = sender.send(1);
                                     continue;
                                 }
-                                println!("QQ {e:?}");
-                                panic!("RR");
+                                panic!("load_side_es_module_from_code Err JS {e:?}");
                             }
                             Err(e) => {
-                                println!("NOOO {e:?}");
-                                panic!("QQQ");
+                                panic!("load_side_es_module_from_code {e:?}");
                             }
                         };
 
@@ -368,16 +365,14 @@ if (typeof main !== 'object') {{
                         match js_runtime.run_event_loop(Default::default()).await {
                             Ok(_) => {}
                             Err(e) => {
-                                println!("LLL {e:?}");
-                                panic!("III");
+                                panic!("run_event_loop {e:?}");
                             }
                         };
 
                         match eval.await {
                             Ok(_) => {}
                             Err(e) => {
-                                println!("KKKK {e:?}");
-                                panic!("WWW");
+                                panic!("eval: {e:?}");
                             }
                         };
 
@@ -425,8 +420,7 @@ globalThis.{GLOBAL_VARIABLE_NAME} = {await_keyword} main.{}(...{input_params});
                         {
                             Ok(mod_id) => mod_id,
                             Err(e) => {
-                                println!("NOOO {e:?}");
-                                panic!("QQQ");
+                                panic!("load_side_es_module_from_code {e:?}");
                             }
                         };
                         debug!("Evaluating code");
@@ -454,8 +448,7 @@ globalThis.{GLOBAL_VARIABLE_NAME} = {await_keyword} main.{}(...{input_params});
                         match eval.await {
                             Ok(_) => {}
                             Err(e) => {
-                                println!("KKKK {e:?}");
-                                panic!("WWW");
+                                panic!("eval Err {e:?}");
                             }
                         };
 
@@ -505,8 +498,8 @@ globalThis.{GLOBAL_VARIABLE_NAME} = {await_keyword} main.{}(...{input_params});
             let _ = thread_id.join(); // ignore this error.
             return Err(JSRunnerError::InitTimeout);
         }
-        Ok(Err(_)) => {
-            panic!("OOPT")
+        Ok(Err(e)) => {
+            panic!("RecvError {e:?}")
         }
         Ok(Ok(Err(e))) => {
             warn!("Error in start up");
@@ -749,7 +742,6 @@ function foo(a) {}
         let function = loaded_code.into_function(false, "foo".to_string()).await;
 
         let err = function.err().unwrap();
-        println!("{err:?}");
         assert!(matches!(err, JSRunnerError::DefaultExportIsNotAnObject));
     }
 
