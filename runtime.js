@@ -41,6 +41,8 @@ import { DOMException } from "ext:deno_web/01_dom_exception.js";
 import * as abortSignal from "ext:deno_web/03_abort_signal.js";
 import * as imageData from "ext:deno_web/16_image_data.js";
 
+// This is changed !!!
+// We don't want to color the STDOUT/STDERR because we could send it to HTTP...
 console.setNoColorFns(
     () => true,
     () => true,
