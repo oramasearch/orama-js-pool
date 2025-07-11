@@ -69,3 +69,41 @@ impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'st
         executor_lock.exec(params, stdout_sender, option).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde::{Deserialize, Serialize};
+
+    use super::*;
+    use std::time::Duration;
+
+    #[derive(Clone, Serialize, Deserialize)]
+    struct TestInput(i32);
+
+    #[tokio::test]
+    async fn test_jspool_executor_basic() {
+        // JS code: function addOne(x) { return x + 1; }
+        let js_code = r#"
+            function addOne(x) { return x + 1; }
+            export default { addOne };
+        "#.to_string();
+
+        let pool = JSPoolExecutor::<TestInput, i32>::new(
+            js_code,
+            2, // two executors
+            None,
+            Duration::from_secs(2),
+            false,
+            "addOne".to_string(),
+        )
+        .await
+        .expect("Failed to create JSPoolExecutor");
+
+        let result = pool
+            .exec(TestInput(41), None, ExecOption { timeout: Duration::from_secs(2), allowed_hosts: None })
+            .await
+            .expect("Execution failed");
+
+        assert_eq!(result, 42);
+    }
+}

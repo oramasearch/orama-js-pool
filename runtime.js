@@ -41,6 +41,11 @@ import { DOMException } from "ext:deno_web/01_dom_exception.js";
 import * as abortSignal from "ext:deno_web/03_abort_signal.js";
 import * as imageData from "ext:deno_web/16_image_data.js";
 
+console.setNoColorFns(
+    () => true,
+    () => true,
+)
+
 const windowOrWorkerGlobalScope = {
     AbortController: core.propNonEnumerable(abortSignal.AbortController),
     AbortSignal: core.propNonEnumerable(abortSignal.AbortSignal),

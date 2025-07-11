@@ -14,8 +14,8 @@ repository = "https://github.com/oramasearch/orama-js-pool"
 homepage = "https://crates.io/crates/orama-js-pool"
 
 exclude = [
-    "open_ai_js_example/*",
-    ".github/*",
+  "open_ai_js_example/*",
+  ".github/*",
 ]
 
 [lib]
