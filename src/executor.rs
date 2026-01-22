@@ -245,4 +245,134 @@ export default { foo }
             assert_eq!(ret, "DONE".to_string());
         }
     }
+
+    #[tokio::test]
+    async fn test_kv_get() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let js_code = r#"
+function get_config() {
+    const endpoint = this.orama.kv.get("api_endpoint");
+    const key = this.orama.kv.get("nonexistent");
+    return `${endpoint}:${key}`;
+}
+export default { get_config };
+        "#
+        .to_string();
+
+        let mut kv_map = std::collections::HashMap::new();
+        kv_map.insert(
+            "api_endpoint".to_string(),
+            "https://api.example.com".to_string(),
+        );
+
+        let mut executor: JSExecutor<(), String> =
+            JSExecutor::builder(js_code, "get_config".to_string())
+                .kv(kv_map)
+                .build()
+                .await
+                .unwrap();
+
+        let ret = executor
+            .exec(
+                (),
+                None,
+                ExecOption {
+                    allowed_hosts: None,
+                    timeout: Duration::from_millis(1_000),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(&ret, "https://api.example.com:undefined");
+    }
+
+    #[tokio::test]
+    async fn test_secret_get() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let js_code = r#"
+function get_secret() {
+    const key = this.orama.secret.get("api_key");
+    const missing = this.orama.secret.get("nonexistent");
+    return `${key}:${missing}`;
+}
+export default { get_secret };
+        "#
+        .to_string();
+
+        let mut secrets_map = std::collections::HashMap::new();
+        secrets_map.insert("api_key".to_string(), "secret_123".to_string());
+
+        let mut executor: JSExecutor<(), String> =
+            JSExecutor::builder(js_code, "get_secret".to_string())
+                .secrets(secrets_map)
+                .build()
+                .await
+                .unwrap();
+
+        let ret = executor
+            .exec(
+                (),
+                None,
+                ExecOption {
+                    allowed_hosts: None,
+                    timeout: Duration::from_millis(1_000),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(&ret, "secret_123:undefined");
+    }
+
+    #[tokio::test]
+    async fn test_cache() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let js_code = r#"
+function test_cache() {
+    let count = this.orama.cache.get("counter") ?? 0;
+    this.orama.cache.set("counter", count + 1);
+    return `${count}`;
+}
+export default { test_cache };
+        "#
+        .to_string();
+
+        let mut executor: JSExecutor<(), String> =
+            JSExecutor::builder(js_code.clone(), "test_cache".to_string())
+                .build()
+                .await
+                .unwrap();
+
+        let ret = executor
+            .exec(
+                (),
+                None,
+                ExecOption {
+                    allowed_hosts: None,
+                    timeout: Duration::from_millis(1_000),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(&ret, "0");
+
+        let ret = executor
+            .exec(
+                (),
+                None,
+                ExecOption {
+                    allowed_hosts: None,
+                    timeout: Duration::from_millis(1_000),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(&ret, "1");
+    }
 }
