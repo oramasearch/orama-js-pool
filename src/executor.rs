@@ -66,11 +66,14 @@ impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'st
     }
 
     /// Create a builder for JSExecutor
-    pub fn builder<Code>() -> JSExecutorBuilder<Input, Output, Code>
+    pub fn builder<Code>(
+        code: Code,
+        function_name: impl Into<String>,
+    ) -> JSExecutorBuilder<Input, Output, Code>
     where
         Code: Into<ModuleCodeString> + Send + 'static,
     {
-        JSExecutorBuilder::new()
+        JSExecutorBuilder::new(code, function_name)
     }
 
     pub async fn exec(
@@ -104,39 +107,34 @@ impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'st
     }
 }
 
-/// Builder for JSExecutor
 pub struct JSExecutorBuilder<Input, Output, Code> {
-    code: Option<Code>,
+    code: Code,
+    function_name: String,
     kv: Option<HashMap<String, String>>,
     secrets: Option<HashMap<String, String>>,
     allowed_hosts_on_init: Option<Vec<String>>,
     timeout_on_init: Duration,
     is_async: bool,
-    function_name: Option<String>,
     _phantom: std::marker::PhantomData<(Input, Output)>,
 }
 
-impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'static, Code>
-    JSExecutorBuilder<Input, Output, Code>
+impl<Input, Output, Code> JSExecutorBuilder<Input, Output, Code>
 where
+    Input: TryIntoFunctionParameters,
+    Output: serde::de::DeserializeOwned + 'static,
     Code: Into<ModuleCodeString> + Send + 'static,
 {
-    fn new() -> Self {
+    pub fn new(code: Code, function_name: impl Into<String>) -> Self {
         Self {
-            code: None,
+            code,
+            function_name: function_name.into(),
             kv: None,
             secrets: None,
-            allowed_hosts_on_init: Some(vec![]), // Default: no network access
+            allowed_hosts_on_init: Some(vec![]),
             timeout_on_init: Duration::from_secs(30),
             is_async: false,
-            function_name: None,
             _phantom: std::marker::PhantomData,
         }
-    }
-
-    pub fn code(mut self, code: Code) -> Self {
-        self.code = Some(code);
-        self
     }
 
     pub fn kv(mut self, kv: HashMap<String, String>) -> Self {
@@ -165,17 +163,7 @@ where
         self
     }
 
-    pub fn function_name<S: Into<String>>(mut self, name: S) -> Self {
-        self.function_name = Some(name.into());
-        self
-    }
-
     pub async fn build(self) -> Result<JSExecutor<Input, Output>, JSRunnerError> {
-        let code = self.code.ok_or_else(|| JSRunnerError::MissingCode)?;
-        let function_name = self
-            .function_name
-            .ok_or_else(|| JSRunnerError::MissingFunctionName)?;
-
         let shared_cache = SharedCache::new();
         let shared_kv = match self.kv {
             Some(map) => SharedKV::from_map(map),
@@ -187,11 +175,11 @@ where
         };
 
         JSExecutor::try_new(
-            code,
+            self.code,
             self.allowed_hosts_on_init,
             self.timeout_on_init,
             self.is_async,
-            function_name,
+            self.function_name,
             shared_cache,
             shared_kv,
             shared_secrets,

@@ -58,12 +58,6 @@ pub enum JSRunnerError {
     #[error("compilation error: {0}")]
     CompilationError(Box<deno_core::error::JsError>),
 
-    #[error("code is required but was not provided")]
-    MissingCode,
-
-    #[error("function name is required but was not provided")]
-    MissingFunctionName,
-
     #[error("unknown")]
     Unknown,
 }

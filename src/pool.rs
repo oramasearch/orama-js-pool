@@ -83,11 +83,14 @@ impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'st
     }
 
     /// Create a builder for JSPoolExecutor
-    pub fn builder<Code>() -> JSPoolExecutorBuilder<Input, Output, Code>
+    pub fn builder<Code>(
+        code: Code,
+        function_name: impl Into<String>,
+    ) -> JSPoolExecutorBuilder<Input, Output, Code>
     where
         Code: Into<ModuleCodeString> + Send + Clone + 'static,
     {
-        JSPoolExecutorBuilder::new()
+        JSPoolExecutorBuilder::new(code, function_name)
     }
 
     /// Update a KV value (thread-safe, available to all executors)
@@ -125,14 +128,14 @@ impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'st
 
 /// Builder for JSPoolExecutor
 pub struct JSPoolExecutorBuilder<Input, Output, Code> {
-    code: Option<Code>,
+    code: Code,
+    function_name: String,
     instances: usize,
     kv: Option<HashMap<String, String>>,
     secrets: Option<HashMap<String, String>>,
     allowed_hosts_on_init: Option<Vec<String>>,
     timeout_on_init: std::time::Duration,
     is_async: bool,
-    function_name: Option<String>,
     _phantom: std::marker::PhantomData<(Input, Output)>,
 }
 
@@ -141,23 +144,18 @@ impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'st
 where
     Code: Into<ModuleCodeString> + Send + Clone + 'static,
 {
-    fn new() -> Self {
+    pub fn new(code: Code, function_name: impl Into<String>) -> Self {
         Self {
-            code: None,
+            code,
+            function_name: function_name.into(),
             instances: 1,
             kv: None,
             secrets: None,
             allowed_hosts_on_init: Some(vec![]), // Default: no network access
             timeout_on_init: std::time::Duration::from_secs(30),
             is_async: false,
-            function_name: None,
             _phantom: std::marker::PhantomData,
         }
-    }
-
-    pub fn code(mut self, code: Code) -> Self {
-        self.code = Some(code);
-        self
     }
 
     pub fn instances(mut self, instances: usize) -> Self {
@@ -191,26 +189,16 @@ where
         self
     }
 
-    pub fn function_name<S: Into<String>>(mut self, name: S) -> Self {
-        self.function_name = Some(name.into());
-        self
-    }
-
     pub async fn build(self) -> Result<JSPoolExecutor<Input, Output>, JSRunnerError> {
-        let code = self.code.ok_or_else(|| JSRunnerError::MissingCode)?;
-        let function_name = self
-            .function_name
-            .ok_or_else(|| JSRunnerError::MissingFunctionName)?;
-
         JSPoolExecutor::new(
-            code,
+            self.code,
             self.instances,
             self.kv,
             self.secrets,
             self.allowed_hosts_on_init,
             self.timeout_on_init,
             self.is_async,
-            function_name,
+            self.function_name,
         )
         .await
     }
