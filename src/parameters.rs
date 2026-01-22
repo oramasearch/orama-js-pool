@@ -63,8 +63,7 @@ mod tests {
         test_into_function_params(vec!["true".to_string()]);
         test_into_function_params(vec!["true".to_string(), "false".to_string()]);
 
-        let params: Vec<serde_json::Value> =
-            vec!["true".try_into().unwrap(), 1.try_into().unwrap()];
+        let params: Vec<serde_json::Value> = vec!["true".into(), 1.into()];
         test_into_function_params(params);
     }
 }

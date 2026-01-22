@@ -18,6 +18,8 @@ async fn main() -> Result<(), JSRunnerError> {
     let pool = JSPoolExecutor::<serde_json::Value, usize>::new(
         CODE_LOG.to_string(),
         2,    // 2 executors
+        None, // No KV
+        None, // No Secrets
         None, // no http domain restriction
         Duration::from_millis(200),
         false, // not async
@@ -35,8 +37,8 @@ async fn main() -> Result<(), JSRunnerError> {
     let print_task = tokio::spawn(async move {
         while let Ok((channel, msg)) = receiver.recv().await {
             match channel {
-                OutputChannel::StdOut => print!("[JS stdout] {}", msg),
-                OutputChannel::StdErr => eprint!("[JS stderr] {}", msg),
+                OutputChannel::StdOut => print!("[JS stdout] {msg}"),
+                OutputChannel::StdErr => eprint!("[JS stderr] {msg}"),
             }
         }
     });
@@ -52,7 +54,7 @@ async fn main() -> Result<(), JSRunnerError> {
         )
         .await?;
 
-    println!("Returned value: {}", result);
+    println!("Returned value: {result}");
     // Give the print task a moment to flush output
     tokio::time::sleep(Duration::from_millis(100)).await;
     drop(print_task); // End the print task

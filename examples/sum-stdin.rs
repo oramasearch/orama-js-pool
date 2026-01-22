@@ -17,6 +17,8 @@ async fn main() -> Result<(), JSRunnerError> {
     let pool = JSPoolExecutor::<Vec<u8>, u8>::new(
         CODE_SUM.to_string(),
         10,   // 10 executors
+        None, // No KV
+        None, // No Secrets
         None, // no restriction on http domains
         Duration::from_millis(200),
         false, // is_async
@@ -58,7 +60,7 @@ async fn main() -> Result<(), JSRunnerError> {
                 },
             )
             .await?;
-        println!("sum({a1}, {a2}) == {}", output);
+        println!("sum({a1}, {a2}) == {output}");
     }
 
     Ok(())

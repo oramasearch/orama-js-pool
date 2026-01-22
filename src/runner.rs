@@ -11,7 +11,8 @@ use tracing::{debug, info, trace, warn};
 
 use crate::{
     orama_extension::{
-        orama_extension, ChannelStorage, OutputChannel, StdoutHandler, StdoutHandlerFn,
+        orama_extension, ChannelStorage, OutputChannel, SharedCache, SharedKV, SharedSecrets,
+        StdoutHandler, StdoutHandlerFn,
     },
     parameters::TryIntoFunctionParameters,
     permission::CustomPermissions,
@@ -56,6 +57,12 @@ pub enum JSRunnerError {
 
     #[error("compilation error: {0}")]
     CompilationError(Box<deno_core::error::JsError>),
+
+    #[error("code is required but was not provided")]
+    MissingCode,
+
+    #[error("function name is required but was not provided")]
+    MissingFunctionName,
 
     #[error("unknown")]
     Unknown,
@@ -223,6 +230,9 @@ pub async fn load_code<
     code: Code,
     allowed_hosts: Option<Vec<String>>,
     timeout: Duration,
+    shared_cache: SharedCache,
+    shared_kv: SharedKV,
+    shared_secrets: SharedSecrets,
 ) -> Result<LoadedJsModule<Input, Output>, JSRunnerError> {
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<LoadedCodeEvent>(1);
     let (init_sender1, init_receiver1) =
@@ -255,6 +265,9 @@ pub async fn load_code<
                             stream_handler: None,
                         },
                         StdoutHandler(None),
+                        shared_cache,
+                        shared_kv,
+                        shared_secrets,
                     ),
                 ],
                 startup_snapshot: Some(RUNTIME_SNAPSHOT),
@@ -407,7 +420,22 @@ if (typeof main !== 'object') {{
                         let code = format!(
                             r#"
 import main from "{MAIN_IMPORT_MODULE_NAME}";
-globalThis.{GLOBAL_VARIABLE_NAME} = {await_keyword} main.{}(...{input_params});
+const thisContext = {{
+    orama: {{
+        cache: {{
+            get: (key) => Deno.core.ops.op_cache_get(key) ?? undefined,
+            set: (key, value, options) => Deno.core.ops.op_cache_set(key, value, options?.ttl),
+            delete: (key) => Deno.core.ops.op_cache_delete(key)
+        }},
+        kv: {{
+            get: (key) => Deno.core.ops.op_kv_get(key) ?? undefined
+        }},
+        secret: {{
+            get: (key) => Deno.core.ops.op_secret_get(key) ?? undefined
+        }}
+    }}
+}};
+globalThis.{GLOBAL_VARIABLE_NAME} = {await_keyword} main.{}.call(thisContext, ...{input_params});
                 "#,
                             &function_name
                         );
@@ -577,6 +605,9 @@ export function life() {
             .to_string(),
             None,
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -597,6 +628,9 @@ export function life() {
             .to_string(),
             None,
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await;
 
@@ -620,6 +654,9 @@ export function life() {
             .to_string(),
             None,
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await;
 
@@ -646,6 +683,9 @@ export function life() {
             .to_string(),
             Some(vec![]), // `localhost:3000` is not allowed
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await;
 
@@ -667,6 +707,9 @@ export function life() {
             .to_string(),
             Some(vec![]), // `localhost:3000` is not allowed
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await;
 
@@ -674,7 +717,7 @@ export function life() {
         let JSRunnerError::CompilationError(e) = err else {
             panic!("Not InitializationError");
         };
-        assert!(format!("{:?}", e).contains("SyntaxError"));
+        assert!(format!("{e:?}").contains("SyntaxError"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
@@ -692,6 +735,9 @@ await fetch('http://localhost:{}/');
             ),
             Some(vec![format!("localhost:{}", addr.port())]),
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -712,6 +758,9 @@ export default { foo }
             .to_string(),
             None,
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -735,6 +784,9 @@ function foo(a) {}
             .to_string(),
             None,
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -758,6 +810,9 @@ export default { } // Empty object
             .to_string(),
             None,
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -781,6 +836,9 @@ export default { foo }
             .to_string(),
             None,
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -806,6 +864,9 @@ export default { foo }
             .to_string(),
             None,
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -844,6 +905,9 @@ export default { foo }
             .to_string(),
             None,
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -853,11 +917,7 @@ export default { foo }
             .await
             .unwrap();
 
-        let params: Vec<serde_json::Value> = vec![
-            "foo".try_into().unwrap(),
-            32.try_into().unwrap(),
-            "gg".try_into().unwrap(),
-        ];
+        let params: Vec<serde_json::Value> = vec!["foo".into(), 32.into(), "gg".into()];
         let ret = function
             .exec(
                 params,
@@ -887,6 +947,9 @@ export default { foo }
             .to_string(),
             None,
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -927,6 +990,9 @@ export default { foo }
             .to_string(),
             None,
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -980,6 +1046,9 @@ export default { foo }
             .to_string(),
             None,
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -1003,7 +1072,7 @@ export default { foo }
         let err = ret.err().unwrap();
         assert!(matches!(err, JSRunnerError::ExecTimeout));
 
-        assert_eq!(false, function.is_alive());
+        assert!(!function.is_alive());
     }
 
     #[tokio::test]
@@ -1022,6 +1091,9 @@ export default { foo }
             .to_string(),
             None,
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -1044,7 +1116,7 @@ export default { foo }
 
         let err = ret.err().unwrap();
         assert!(matches!(err, JSRunnerError::ExecTimeout));
-        assert_eq!(false, function.is_alive());
+        assert!(!function.is_alive());
     }
 
     #[tokio::test]
@@ -1063,6 +1135,9 @@ export default { foo }
             .to_string(),
             None,
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -1102,6 +1177,9 @@ export default { foo }
             .to_string(),
             None,
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -1144,6 +1222,9 @@ export default { foo }
             .to_string(),
             None,
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -1187,6 +1268,9 @@ export default { foo }
             .to_string(),
             None,
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -1229,6 +1313,9 @@ export default { foo }
             .to_string(),
             None,
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -1282,6 +1369,9 @@ export default {{ foo }}
             ),
             Some(vec![]),
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -1331,6 +1421,9 @@ export default { foo }
             .to_string(),
             Some(vec![]),
             Duration::from_millis(1_000),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await
         .unwrap();

@@ -3,10 +3,11 @@ use std::{sync::Arc, time::Duration};
 use deno_core::{FastString, ModuleCodeString};
 
 use crate::{
-    orama_extension::OutputChannel,
+    orama_extension::{OutputChannel, SharedCache, SharedKV, SharedSecrets},
     runner::{load_code, ExecOption, JSRunnerError, LoadedJsFunction},
     TryIntoFunctionParameters,
 };
+use std::collections::HashMap;
 
 pub struct JSExecutor<Input, Output> {
     loaded_function: LoadedJsFunction<Input, Output>,
@@ -15,17 +16,24 @@ pub struct JSExecutor<Input, Output> {
     is_async: bool,
     allowed_hosts_on_init: Option<Vec<String>>,
     timeout_on_init: Duration,
+    shared_cache: SharedCache,
+    shared_kv: SharedKV,
+    shared_secrets: SharedSecrets,
 }
 
 impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'static>
     JSExecutor<Input, Output>
 {
+    #[allow(clippy::too_many_arguments)]
     pub async fn try_new<Code: Into<ModuleCodeString> + Send + 'static>(
         code: Code,
         allowed_hosts_on_init: Option<Vec<String>>,
         timeout_on_init: Duration,
         is_async: bool,
         function_name: String,
+        shared_cache: SharedCache,
+        shared_kv: SharedKV,
+        shared_secrets: SharedSecrets,
     ) -> Result<Self, JSRunnerError> {
         let code = code.into();
 
@@ -34,6 +42,9 @@ impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'st
             copy1,
             allowed_hosts_on_init.clone(),
             timeout_on_init,
+            shared_cache.clone(),
+            shared_kv.clone(),
+            shared_secrets.clone(),
         )
         .await?;
 
@@ -48,7 +59,18 @@ impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'st
             is_async,
             allowed_hosts_on_init,
             timeout_on_init,
+            shared_cache,
+            shared_kv,
+            shared_secrets,
         })
+    }
+
+    /// Create a builder for JSExecutor
+    pub fn builder<Code>() -> JSExecutorBuilder<Input, Output, Code>
+    where
+        Code: Into<ModuleCodeString> + Send + 'static,
+    {
+        JSExecutorBuilder::new()
     }
 
     pub async fn exec(
@@ -64,6 +86,9 @@ impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'st
                 code,
                 self.allowed_hosts_on_init.clone(),
                 self.timeout_on_init,
+                self.shared_cache.clone(),
+                self.shared_kv.clone(),
+                self.shared_secrets.clone(),
             )
             .await?;
 
@@ -76,6 +101,102 @@ impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'st
         self.loaded_function
             .exec(params, stdout_sender, option)
             .await
+    }
+}
+
+/// Builder for JSExecutor
+pub struct JSExecutorBuilder<Input, Output, Code> {
+    code: Option<Code>,
+    kv: Option<HashMap<String, String>>,
+    secrets: Option<HashMap<String, String>>,
+    allowed_hosts_on_init: Option<Vec<String>>,
+    timeout_on_init: Duration,
+    is_async: bool,
+    function_name: Option<String>,
+    _phantom: std::marker::PhantomData<(Input, Output)>,
+}
+
+impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'static, Code>
+    JSExecutorBuilder<Input, Output, Code>
+where
+    Code: Into<ModuleCodeString> + Send + 'static,
+{
+    fn new() -> Self {
+        Self {
+            code: None,
+            kv: None,
+            secrets: None,
+            allowed_hosts_on_init: Some(vec![]), // Default: no network access
+            timeout_on_init: Duration::from_secs(30),
+            is_async: false,
+            function_name: None,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    pub fn code(mut self, code: Code) -> Self {
+        self.code = Some(code);
+        self
+    }
+
+    pub fn kv(mut self, kv: HashMap<String, String>) -> Self {
+        self.kv = Some(kv);
+        self
+    }
+
+    pub fn secrets(mut self, secrets: HashMap<String, String>) -> Self {
+        self.secrets = Some(secrets);
+        self
+    }
+
+    pub fn allowed_hosts(mut self, hosts: Vec<String>) -> Self {
+        self.allowed_hosts_on_init = Some(hosts);
+        self
+    }
+
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout_on_init = timeout;
+        self
+    }
+
+    #[allow(clippy::wrong_self_convention)]
+    pub fn is_async(mut self, is_async: bool) -> Self {
+        self.is_async = is_async;
+        self
+    }
+
+    pub fn function_name<S: Into<String>>(mut self, name: S) -> Self {
+        self.function_name = Some(name.into());
+        self
+    }
+
+    pub async fn build(self) -> Result<JSExecutor<Input, Output>, JSRunnerError> {
+        let code = self.code.ok_or_else(|| JSRunnerError::MissingCode)?;
+        let function_name = self
+            .function_name
+            .ok_or_else(|| JSRunnerError::MissingFunctionName)?;
+
+        let shared_cache = SharedCache::new();
+        let shared_kv = match self.kv {
+            Some(map) => SharedKV::from_map(map),
+            None => SharedKV::new(),
+        };
+        let shared_secrets = match self.secrets {
+            Some(map) => SharedSecrets::from_map(map),
+            None => SharedSecrets::new(),
+        };
+
+        JSExecutor::try_new(
+            code,
+            self.allowed_hosts_on_init,
+            self.timeout_on_init,
+            self.is_async,
+            function_name,
+            shared_cache,
+            shared_kv,
+            shared_secrets,
+        )
+        .await
     }
 }
 
@@ -101,6 +222,9 @@ export default { foo }
             Duration::from_millis(1_000),
             true,
             "foo".to_string(),
+            SharedCache::new(),
+            SharedKV::new(),
+            SharedSecrets::new(),
         )
         .await
         .unwrap();
