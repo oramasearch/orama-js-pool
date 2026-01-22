@@ -252,58 +252,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_kv_and_secrets_access() {
-        // Test that JS can access KV and Secrets
-        let js_code = r#"
-            function test_kv_secrets() {
-                const endpoint = this.orama.kv.get("api_endpoint");
-                const key = this.orama.secret.get("api_key");
-                return `${endpoint}:${key}`;
-            }
-            export default { test_kv_secrets };
-        "#
-        .to_string();
-
-        let mut kv_map = HashMap::new();
-        kv_map.insert(
-            "api_endpoint".to_string(),
-            "https://api.example.com".to_string(),
-        );
-
-        let mut secrets_map = HashMap::new();
-        secrets_map.insert("api_key".to_string(), "secret_123".to_string());
-
-        let pool = JSPoolExecutor::<(), String>::new(
-            js_code,
-            2,
-            Some(kv_map),
-            Some(secrets_map),
-            None,
-            Duration::from_secs(2),
-            false,
-            "test_kv_secrets".to_string(),
-        )
-        .await
-        .expect("Failed to create JSPoolExecutor");
-
-        let result = pool
-            .exec(
-                (),
-                None,
-                ExecOption {
-                    timeout: Duration::from_secs(2),
-                    allowed_hosts: None,
-                },
-            )
-            .await
-            .expect("Execution failed");
-
-        assert_eq!(result, "https://api.example.com:secret_123");
-    }
-
-    #[tokio::test]
-    async fn test_update_kv_and_secrets() {
-        // Test that we can update KV and Secrets from Rust and JS sees the changes
+    async fn test_kv_and_secrets() {
         let js_code = r#"
             function get_config() {
                 const endpoint = this.orama.kv.get("api_endpoint");
@@ -325,7 +274,7 @@ mod tests {
 
         let pool = JSPoolExecutor::<(), String>::new(
             js_code,
-            2,
+            2, // Multiple executor to test kv/secret across the pool
             Some(kv_map),
             Some(secrets_map),
             None,
@@ -351,7 +300,7 @@ mod tests {
 
         assert_eq!(result, "https://old-api.example.com:old_secret");
 
-        // Update from Rust
+        // Update
         pool.update_kv(
             "api_endpoint".to_string(),
             "https://new-api.example.com".to_string(),
@@ -375,41 +324,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_kv_and_secrets_with_cache() {
-        // Test that cache, kv, and secrets work together
+    async fn test_cache() {
         let js_code = r#"
             function test_all() {
-                // Get from KV
-                const endpoint = this.orama.kv.get("api_endpoint");
-                
-                // Get from Secret
-                const key = this.orama.secret.get("api_key");
-                
-                // Use cache
                 const cached = this.orama.cache.get("counter");
                 const count = cached ? cached + 1 : 1;
                 this.orama.cache.set("counter", count);
                 
-                return `${endpoint}:${key}:${count}`;
+                return `count: ${count}`;
             }
             export default { test_all };
         "#
         .to_string();
 
-        let mut kv_map = HashMap::new();
-        kv_map.insert(
-            "api_endpoint".to_string(),
-            "https://api.example.com".to_string(),
-        );
-
-        let mut secrets_map = HashMap::new();
-        secrets_map.insert("api_key".to_string(), "secret_789".to_string());
-
         let pool = JSPoolExecutor::<(), String>::new(
             js_code,
-            1, // Single executor to test cache persistence
-            Some(kv_map),
-            Some(secrets_map),
+            10, // Multiple executor to test cache persistence across the pool
+            None,
+            None,
             None,
             Duration::from_secs(2),
             false,
@@ -418,40 +350,26 @@ mod tests {
         .await
         .expect("Failed to create JSPoolExecutor");
 
-        // First call - cache starts at 1
-        let result = pool
-            .exec(
-                (),
-                None,
-                ExecOption {
-                    timeout: Duration::from_secs(2),
-                    allowed_hosts: None,
-                },
-            )
-            .await
-            .expect("Execution failed");
+        // To test that the cache is shared
+        for i in 1..20 {
+            let result = pool
+                .exec(
+                    (),
+                    None,
+                    ExecOption {
+                        timeout: Duration::from_secs(2),
+                        allowed_hosts: None,
+                    },
+                )
+                .await
+                .expect("Execution failed");
 
-        assert_eq!(result, "https://api.example.com:secret_789:1");
-
-        // Second call - cache increments to 2
-        let result = pool
-            .exec(
-                (),
-                None,
-                ExecOption {
-                    timeout: Duration::from_secs(2),
-                    allowed_hosts: None,
-                },
-            )
-            .await
-            .expect("Execution failed");
-
-        assert_eq!(result, "https://api.example.com:secret_789:2");
+            assert_eq!(result, format!("count: {i}"));
+        }
     }
 
     #[tokio::test]
     async fn test_missing_kv_and_secrets() {
-        // Test that accessing non-existent keys returns null/undefined
         let js_code = r#"
             function test_missing() {
                 const endpoint = this.orama.kv.get("nonexistent");
