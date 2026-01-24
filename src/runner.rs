@@ -253,6 +253,7 @@ pub async fn load_code<
                     deno_fetch::deno_fetch::init_ops::<CustomPermissions>(
                         deno_fetch::Options::default(),
                     ),
+                    deno_crypto::deno_crypto::init_ops(None), // deno_crypto
                     orama_extension::init_ops(
                         CustomPermissions { allowed_hosts },
                         ChannelStorage::<Output> {

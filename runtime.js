@@ -40,7 +40,7 @@ import * as webidl from "ext:deno_webidl/00_webidl.js";
 import { DOMException } from "ext:deno_web/01_dom_exception.js";
 import * as abortSignal from "ext:deno_web/03_abort_signal.js";
 import * as imageData from "ext:deno_web/16_image_data.js";
-
+import * as crypto from "ext:deno_crypto/00_crypto.js";
 // This is changed !!!
 // We don't want to color the STDOUT/STDERR because we could send it to HTTP...
 console.setNoColorFns(
@@ -126,6 +126,12 @@ const windowOrWorkerGlobalScope = {
             return Deno.core.ops.op_stream_to_oramacore_print(msg, level > 1)
         }),
     ),
+    // Coped from;
+    // https://github.com/denoland/deno/blob/a02d2201797d5e3436a251ff39e4cde6b2d4a13b/ext/crypto/README.md?plain=1#L13
+    Crypto: core.propWritable(crypto.Crypto),
+    CryptoKey: core.propWritable(crypto.CryptoKey),
+    crypto: core.propWritable(crypto.crypto),
+    SubtleCrypto: core.propWritable(crypto.SubtleCrypto),
     fetch: core.propWritable(fetch.fetch),
     EventSource: core.propWritable(eventSource.EventSource),
     performance: core.propWritable(performance.performance),

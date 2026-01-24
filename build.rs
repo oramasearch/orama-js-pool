@@ -34,6 +34,7 @@ fn main() {
                 deno_fetch::deno_fetch::init_ops_and_esm::<permission::CustomPermissions>(
                     deno_fetch::Options::default(),
                 ),
+                deno_crypto::deno_crypto::init_ops_and_esm(None), // deno_crypto
                 orama_extension::orama_extension::init_ops_and_esm(
                     permission::CustomPermissions {
                         // During the snapshot build, no permissions are allowed
