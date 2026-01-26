@@ -3,11 +3,10 @@ use std::{sync::Arc, time::Duration};
 use deno_core::{FastString, ModuleCodeString};
 
 use crate::{
-    orama_extension::{OutputChannel, SharedCache, SharedKV, SharedSecrets},
+    orama_extension::{OutputChannel, SharedCache},
     runner::{load_code, ExecOption, JSRunnerError, LoadedJsFunction},
     TryIntoFunctionParameters,
 };
-use std::collections::HashMap;
 
 pub struct JSExecutor<Input, Output> {
     loaded_function: LoadedJsFunction<Input, Output>,
@@ -17,8 +16,6 @@ pub struct JSExecutor<Input, Output> {
     allowed_hosts_on_init: Option<Vec<String>>,
     timeout_on_init: Duration,
     shared_cache: SharedCache,
-    shared_kv: SharedKV,
-    shared_secrets: SharedSecrets,
 }
 
 impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'static>
@@ -32,8 +29,6 @@ impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'st
         is_async: bool,
         function_name: String,
         shared_cache: SharedCache,
-        shared_kv: SharedKV,
-        shared_secrets: SharedSecrets,
     ) -> Result<Self, JSRunnerError> {
         let code = code.into();
 
@@ -43,8 +38,6 @@ impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'st
             allowed_hosts_on_init.clone(),
             timeout_on_init,
             shared_cache.clone(),
-            shared_kv.clone(),
-            shared_secrets.clone(),
         )
         .await?;
 
@@ -60,8 +53,6 @@ impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'st
             allowed_hosts_on_init,
             timeout_on_init,
             shared_cache,
-            shared_kv,
-            shared_secrets,
         })
     }
 
@@ -90,8 +81,6 @@ impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'st
                 self.allowed_hosts_on_init.clone(),
                 self.timeout_on_init,
                 self.shared_cache.clone(),
-                self.shared_kv.clone(),
-                self.shared_secrets.clone(),
             )
             .await?;
 
@@ -110,8 +99,6 @@ impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'st
 pub struct JSExecutorBuilder<Input, Output, Code> {
     code: Code,
     function_name: String,
-    kv: Option<HashMap<String, String>>,
-    secrets: Option<HashMap<String, String>>,
     allowed_hosts_on_init: Option<Vec<String>>,
     timeout_on_init: Duration,
     is_async: bool,
@@ -128,23 +115,11 @@ where
         Self {
             code,
             function_name: function_name.into(),
-            kv: None,
-            secrets: None,
             allowed_hosts_on_init: Some(vec![]),
             timeout_on_init: Duration::from_secs(30),
             is_async: false,
             _phantom: std::marker::PhantomData,
         }
-    }
-
-    pub fn kv(mut self, kv: HashMap<String, String>) -> Self {
-        self.kv = Some(kv);
-        self
-    }
-
-    pub fn secrets(mut self, secrets: HashMap<String, String>) -> Self {
-        self.secrets = Some(secrets);
-        self
     }
 
     pub fn allowed_hosts(mut self, hosts: Vec<String>) -> Self {
@@ -165,14 +140,6 @@ where
 
     pub async fn build(self) -> Result<JSExecutor<Input, Output>, JSRunnerError> {
         let shared_cache = SharedCache::new();
-        let shared_kv = match self.kv {
-            Some(map) => SharedKV::from_map(map),
-            None => SharedKV::new(),
-        };
-        let shared_secrets = match self.secrets {
-            Some(map) => SharedSecrets::from_map(map),
-            None => SharedSecrets::new(),
-        };
 
         JSExecutor::try_new(
             self.code,
@@ -181,8 +148,6 @@ where
             self.is_async,
             self.function_name,
             shared_cache,
-            shared_kv,
-            shared_secrets,
         )
         .await
     }
@@ -211,8 +176,6 @@ export default { foo }
             true,
             "foo".to_string(),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -244,87 +207,6 @@ export default { foo }
                 .unwrap();
             assert_eq!(ret, "DONE".to_string());
         }
-    }
-
-    #[tokio::test]
-    async fn test_kv_get() {
-        let _ = tracing_subscriber::fmt::try_init();
-
-        let js_code = r#"
-function get_config() {
-    const endpoint = this.orama.kv.get("api_endpoint");
-    const key = this.orama.kv.get("nonexistent");
-    return `${endpoint}:${key}`;
-}
-export default { get_config };
-        "#
-        .to_string();
-
-        let mut kv_map = std::collections::HashMap::new();
-        kv_map.insert(
-            "api_endpoint".to_string(),
-            "https://api.example.com".to_string(),
-        );
-
-        let mut executor: JSExecutor<(), String> =
-            JSExecutor::builder(js_code, "get_config".to_string())
-                .kv(kv_map)
-                .build()
-                .await
-                .unwrap();
-
-        let ret = executor
-            .exec(
-                (),
-                None,
-                ExecOption {
-                    allowed_hosts: None,
-                    timeout: Duration::from_millis(1_000),
-                },
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(&ret, "https://api.example.com:undefined");
-    }
-
-    #[tokio::test]
-    async fn test_secret_get() {
-        let _ = tracing_subscriber::fmt::try_init();
-
-        let js_code = r#"
-function get_secret() {
-    const key = this.orama.secret.get("api_key");
-    const missing = this.orama.secret.get("nonexistent");
-    return `${key}:${missing}`;
-}
-export default { get_secret };
-        "#
-        .to_string();
-
-        let mut secrets_map = std::collections::HashMap::new();
-        secrets_map.insert("api_key".to_string(), "secret_123".to_string());
-
-        let mut executor: JSExecutor<(), String> =
-            JSExecutor::builder(js_code, "get_secret".to_string())
-                .secrets(secrets_map)
-                .build()
-                .await
-                .unwrap();
-
-        let ret = executor
-            .exec(
-                (),
-                None,
-                ExecOption {
-                    allowed_hosts: None,
-                    timeout: Duration::from_millis(1_000),
-                },
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(&ret, "secret_123:undefined");
     }
 
     #[tokio::test]

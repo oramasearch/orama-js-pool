@@ -11,8 +11,7 @@ use tracing::{debug, info, trace, warn};
 
 use crate::{
     orama_extension::{
-        orama_extension, ChannelStorage, OutputChannel, SharedCache, SharedKV, SharedSecrets,
-        StdoutHandler, StdoutHandlerFn,
+        orama_extension, ChannelStorage, OutputChannel, SharedCache, StdoutHandler, StdoutHandlerFn,
     },
     parameters::TryIntoFunctionParameters,
     permission::CustomPermissions,
@@ -225,8 +224,6 @@ pub async fn load_code<
     allowed_hosts: Option<Vec<String>>,
     timeout: Duration,
     shared_cache: SharedCache,
-    shared_kv: SharedKV,
-    shared_secrets: SharedSecrets,
 ) -> Result<LoadedJsModule<Input, Output>, JSRunnerError> {
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<LoadedCodeEvent>(1);
     let (init_sender1, init_receiver1) =
@@ -261,8 +258,6 @@ pub async fn load_code<
                         },
                         StdoutHandler(None),
                         shared_cache,
-                        shared_kv,
-                        shared_secrets,
                     ),
                 ],
                 startup_snapshot: Some(RUNTIME_SNAPSHOT),
@@ -422,12 +417,6 @@ const thisContext = {{
             set: (key, value, options) => Deno.core.ops.op_cache_set(key, value, options?.ttl),
             delete: (key) => Deno.core.ops.op_cache_delete(key)
         }},
-        kv: {{
-            get: (key) => Deno.core.ops.op_kv_get(key) ?? undefined
-        }},
-        secret: {{
-            get: (key) => Deno.core.ops.op_secret_get(key) ?? undefined
-        }}
     }}
 }};
 globalThis.{GLOBAL_VARIABLE_NAME} = {await_keyword} main.{}.call(thisContext, ...{input_params});
@@ -601,8 +590,6 @@ export function life() {
             None,
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -624,8 +611,6 @@ export function life() {
             None,
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await;
 
@@ -650,8 +635,6 @@ export function life() {
             None,
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await;
 
@@ -679,8 +662,6 @@ export function life() {
             Some(vec![]), // `localhost:3000` is not allowed
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await;
 
@@ -703,8 +684,6 @@ export function life() {
             Some(vec![]), // `localhost:3000` is not allowed
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await;
 
@@ -731,8 +710,6 @@ await fetch('http://localhost:{}/');
             Some(vec![format!("localhost:{}", addr.port())]),
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -754,8 +731,6 @@ export default { foo }
             None,
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -780,8 +755,6 @@ function foo(a) {}
             None,
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -806,8 +779,6 @@ export default { } // Empty object
             None,
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -832,8 +803,6 @@ export default { foo }
             None,
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -860,8 +829,6 @@ export default { foo }
             None,
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -901,8 +868,6 @@ export default { foo }
             None,
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -943,8 +908,6 @@ export default { foo }
             None,
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -986,8 +949,6 @@ export default { foo }
             None,
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -1042,8 +1003,6 @@ export default { foo }
             None,
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -1087,8 +1046,6 @@ export default { foo }
             None,
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -1131,8 +1088,6 @@ export default { foo }
             None,
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -1173,8 +1128,6 @@ export default { foo }
             None,
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -1218,8 +1171,6 @@ export default { foo }
             None,
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -1264,8 +1215,6 @@ export default { foo }
             None,
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -1309,8 +1258,6 @@ export default { foo }
             None,
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -1365,8 +1312,6 @@ export default {{ foo }}
             Some(vec![]),
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await
         .unwrap();
@@ -1417,8 +1362,6 @@ export default { foo }
             Some(vec![]),
             Duration::from_millis(1_000),
             SharedCache::new(),
-            SharedKV::new(),
-            SharedSecrets::new(),
         )
         .await
         .unwrap();

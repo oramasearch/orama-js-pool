@@ -14,8 +14,6 @@ async fn main() -> Result<(), JSRunnerError> {
     let pool = JSPoolExecutor::<Vec<String>, String>::new(
         CODE.to_string(),
         10,   // 10 executors
-        None, // No KV
-        None, // No Secrets
         None, // no http domain restriction on startup
         Duration::from_millis(200),
         true, // is_async

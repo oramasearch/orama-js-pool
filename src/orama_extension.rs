@@ -65,86 +65,6 @@ impl Default for SharedCache {
     }
 }
 
-#[derive(Clone)]
-pub struct SharedKV {
-    data: Arc<RwLock<HashMap<String, String>>>,
-}
-
-impl SharedKV {
-    pub fn new() -> Self {
-        Self {
-            data: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn from_map(map: HashMap<String, String>) -> Self {
-        Self {
-            data: Arc::new(RwLock::new(map)),
-        }
-    }
-
-    pub fn get(&self, key: &str) -> Option<String> {
-        self.data.read().unwrap().get(key).cloned()
-    }
-
-    #[allow(dead_code)]
-    pub fn set(&self, key: String, value: String) {
-        self.data.write().unwrap().insert(key, value);
-    }
-
-    #[allow(dead_code)]
-    pub fn delete(&self, key: &str) {
-        self.data.write().unwrap().remove(key);
-    }
-}
-
-impl Default for SharedKV {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Clone)]
-pub struct SharedSecrets {
-    data: Arc<RwLock<HashMap<String, String>>>,
-}
-
-impl SharedSecrets {
-    pub fn new() -> Self {
-        Self {
-            data: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn from_map(map: HashMap<String, String>) -> Self {
-        Self {
-            data: Arc::new(RwLock::new(map)),
-        }
-    }
-
-    pub fn get(&self, key: &str) -> Option<String> {
-        self.data.read().unwrap().get(key).cloned()
-    }
-
-    #[allow(dead_code)]
-    pub fn set(&self, key: String, value: String) {
-        self.data.write().unwrap().insert(key, value);
-    }
-
-    #[allow(dead_code)]
-    pub fn delete(&self, key: &str) {
-        self.data.write().unwrap().remove(key);
-    }
-}
-
-impl Default for SharedSecrets {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 fn current_timestamp_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -195,21 +115,6 @@ fn op_cache_delete(#[state] cache: &SharedCache, #[string] key: String) -> Resul
     Ok(())
 }
 
-#[op2]
-#[string]
-fn op_kv_get(#[state] kv: &SharedKV, #[string] key: String) -> Result<Option<String>, CoreError> {
-    Ok(kv.get(&key))
-}
-
-#[op2]
-#[string]
-fn op_secret_get(
-    #[state] secrets: &SharedSecrets,
-    #[string] key: String,
-) -> Result<Option<String>, CoreError> {
-    Ok(secrets.get(&key))
-}
-
 #[op2(fast)]
 pub fn op_stream_to_oramacore_print(
     #[state] storage: &mut StdoutHandler,
@@ -237,8 +142,6 @@ extension!(
         op_cache_get,
         op_cache_set,
         op_cache_delete,
-        op_kv_get,
-        op_secret_get,
     ],
     esm_entry_point = "ext:orama_extension/runtime.js",
     esm = ["runtime.js"],
@@ -247,15 +150,11 @@ extension!(
         channel_storage: ChannelStorage<V>,
         stdout_handler: StdoutHandler,
         shared_cache: SharedCache,
-        shared_kv: SharedKV,
-        shared_secrets: SharedSecrets,
     },
     state = |state, options| {
         state.put::<CustomPermissions>(options.permissions);
         state.put::<ChannelStorage<V>>(options.channel_storage);
         state.put::<StdoutHandler>(options.stdout_handler);
         state.put::<SharedCache>(options.shared_cache);
-        state.put::<SharedKV>(options.shared_kv);
-        state.put::<SharedSecrets>(options.shared_secrets);
     },
 );

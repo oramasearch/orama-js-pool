@@ -18,8 +18,6 @@ async fn main() -> Result<(), JSRunnerError> {
     let pool = JSPoolExecutor::<serde_json::Value, usize>::new(
         CODE_LOG.to_string(),
         2,    // 2 executors
-        None, // No KV
-        None, // No Secrets
         None, // no http domain restriction
         Duration::from_millis(200),
         false, // not async

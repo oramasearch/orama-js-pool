@@ -46,8 +46,6 @@ fn main() {
                     },
                     orama_extension::StdoutHandler(None),
                     orama_extension::SharedCache::new(),
-                    orama_extension::SharedKV::new(),
-                    orama_extension::SharedSecrets::new(),
                 ),
             ],
             with_runtime_cb: None,

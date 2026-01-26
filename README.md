@@ -26,8 +26,6 @@ async fn main() -> Result<(), JSRunnerError> {
     let pool = JSPoolExecutor::<Vec<u8>, u8>::new(
         CODE_ASYNC_SUM.to_string(),
         10,                         // number of engines
-        None,                       // No KV
-        None,                       // No Secrets
         None,                       // no http domain restriction on startup
         Duration::from_millis(200), // startup timeout
         true,                       // is_async
@@ -57,7 +55,9 @@ async fn main() -> Result<(), JSRunnerError> {
 ## API Overview
 
 ### `JSPoolExecutor`
+
 The main entry point. Manages a pool of JS engines for a given code string. Supports both sync and async JS functions.
+
 - `JSPoolExecutor::<Input, Output>::new(code, pool_size, allowed_hosts, startup_timeout, is_async, function_name)`
 - `exec(params, stdout_stream, ExecOption)` — runs the function with the given parameters. The second parameter is an optional stream to receive stdout/stderr output from the JS function.
 
@@ -65,14 +65,18 @@ The main entry point. Manages a pool of JS engines for a given code string. Supp
 You can capture JavaScript `console.log` and `console.error` output by providing a stream (such as a broadcast channel sender) to the `stdout_stream` parameter of the `exec` method. This allows you to handle or redirect JS stdout/stderr as it is produced during execution. See `stream_console` example.
 
 ### `ExecOption`
+
 Per-execution configuration:
+
 - `timeout`: Maximum execution time per call
 - `allowed_hosts`: Restrict HTTP access for the JS code (optional)
 
 ### `JSRunnerError`
+
 All errors (startup, execution, JS exceptions) are reported as `JSRunnerError`.
 
 ## Features
+
 - **Parallel execution**: Multiple requests handled concurrently
 - **Async and sync JS support**: Run both types of JS functions
 - **Sandboxing**: Restrict network access via `allowed_hosts`
@@ -80,6 +84,7 @@ All errors (startup, execution, JS exceptions) are reported as `JSRunnerError`.
 - **Typed input/output**: Use Rust types for parameters and results (via serde)
 
 ## Example: Streaming (if supported)
+
 If your JS function is an async generator, you can use streaming APIs (see crate docs for details).
 
 ## License
