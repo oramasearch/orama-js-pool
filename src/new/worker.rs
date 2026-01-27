@@ -1,16 +1,16 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 use deno_core::ModuleCodeString;
 use serde::de::DeserializeOwned;
 use tracing::info;
 
 use crate::{
-    orama_extension::{OutputChannel, SharedCache},
+    orama_extension::SharedCache,
     parameters::TryIntoFunctionParameters,
 };
 
 use super::{
-    options::{ExecOptions, ModuleOptions, ResolvedExecOptions},
+    options::{ExecOptions, ModuleOptions},
     runtime::{Runtime, RuntimeError},
 };
 
@@ -19,8 +19,6 @@ struct LoadedModule {
     runtime: Runtime<serde_json::Value, serde_json::Value>,
     code: String,
     options: ModuleOptions,
-    is_async: bool,
-    function_name: String,
 }
 
 /// Worker that can execute multiple modules
@@ -44,9 +42,7 @@ impl Worker {
     pub(crate) async fn add_module<Code>(
         &mut self,
         name: String,
-        function_name: String,
         code: Code,
-        is_async: bool,
         options: ModuleOptions,
     ) -> Result<(), RuntimeError>
     where
@@ -57,7 +53,7 @@ impl Worker {
 
         info!("Loading module: {}", name);
 
-        let mut runtime = Runtime::<serde_json::Value, serde_json::Value>::new(
+        let runtime = Runtime::<serde_json::Value, serde_json::Value>::new(
             code_string,
             options.domain_permission.to_allowed_hosts(),
             options.timeout,
@@ -65,17 +61,10 @@ impl Worker {
         )
         .await?;
 
-        // Check if function exists
-        runtime
-            .check_function(function_name.clone(), is_async)
-            .await?;
-
         let loaded_module = LoadedModule {
             runtime,
             code: code_clone,
             options,
-            is_async,
-            function_name,
         };
 
         self.modules.insert(name, loaded_module);
@@ -87,9 +76,10 @@ impl Worker {
     pub async fn exec<Input, Output>(
         &mut self,
         module_name: &str,
+        function_name: &str,
+        is_async: bool,
         params: Input,
         exec_options: ExecOptions,
-        stdout_sender: Option<Arc<tokio::sync::broadcast::Sender<(OutputChannel, String)>>>,
     ) -> Result<Output, RuntimeError>
     where
         Input: TryIntoFunctionParameters + Send + 'static,
@@ -100,27 +90,19 @@ impl Worker {
             .get_mut(module_name)
             .ok_or_else(|| RuntimeError::NoExportedFunction(module_name.to_string()))?;
 
-        // Merge exec options with module options
-        let resolved_options: ResolvedExecOptions =
-            exec_options.merge_with_module(&module.options);
-
         // Check if runtime is still alive, recreate if needed
         if !module.runtime.is_alive() {
             info!("Runtime not alive, recreating for module: {}", module_name);
             let code = module.code.clone();
             let options = module.options.clone();
-            let function_name = module.function_name.clone();
-            let is_async = module.is_async;
 
-            let mut runtime = Runtime::<serde_json::Value, serde_json::Value>::new(
+            let runtime = Runtime::<serde_json::Value, serde_json::Value>::new(
                 code.clone(),
                 options.domain_permission.to_allowed_hosts(),
                 options.timeout,
                 self.cache.clone(),
             )
             .await?;
-
-            runtime.check_function(function_name, is_async).await?;
 
             module.runtime = runtime;
         }
@@ -133,12 +115,13 @@ impl Worker {
         let result: serde_json::Value = module
             .runtime
             .exec(
-                module.function_name.clone(),
-                module.is_async,
+                function_name.to_string(),
+                is_async,
                 params_value,
-                stdout_sender,
-                resolved_options.allowed_hosts,
-                resolved_options.timeout,
+                exec_options.stdout_sender,
+                // TODO: fix also the allowd hosts
+                None,
+                exec_options.timeout,
             )
             .await?;
 
@@ -171,8 +154,6 @@ pub struct WorkerBuilder {
 
 struct ModuleDefinition {
     code: String,
-    function_name: String,
-    is_async: bool,
     options: ModuleOptions,
 }
 
@@ -188,9 +169,7 @@ impl WorkerBuilder {
     pub fn add_module<Code: Into<ModuleCodeString>>(
         mut self,
         name: impl Into<String>,
-        function_name: impl Into<String>,
         code: Code,
-        is_async: bool,
         options: ModuleOptions,
     ) -> Self {
         let code: ModuleCodeString = code.into();
@@ -198,8 +177,6 @@ impl WorkerBuilder {
             name.into(),
             ModuleDefinition {
                 code: code.as_str().to_string(),
-                function_name: function_name.into(),
-                is_async,
                 options,
             },
         ));
@@ -221,7 +198,7 @@ impl WorkerBuilder {
 
         for (name, def) in self.modules {
             worker
-                .add_module(name, def.function_name, def.code, def.is_async, def.options)
+                .add_module(name, def.code, def.options)
                 .await?;
         }
 

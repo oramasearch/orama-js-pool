@@ -23,8 +23,6 @@ use super::{
 #[derive(Clone)]
 pub struct ModuleDefinition {
     pub code: String,
-    pub function_name: String,
-    pub is_async: bool,
     pub options: ModuleOptions,
 }
 
@@ -94,9 +92,7 @@ impl Manager for WorkerManager {
             for (name, def) in modules {
                 builder = builder.add_module(
                     name,
-                    def.function_name,
                     def.code,
-                    def.is_async,
                     def.options,
                 );
             }
