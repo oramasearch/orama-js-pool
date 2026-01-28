@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use deno_core::ModuleCodeString;
 use serde::de::DeserializeOwned;
@@ -8,7 +9,7 @@ use crate::orama_extension::SharedCache;
 
 use super::{
     manager::{ModuleDefinition, WorkerManager},
-    options::{ExecOptions, ModuleOptions},
+    options::{DomainPermission, ExecOptions, WorkerOptions},
     parameters::TryIntoFunctionParameters,
     runtime::RuntimeError,
 };
@@ -50,7 +51,6 @@ impl Pool {
         &self,
         name: impl Into<String>,
         code: Code,
-        options: ModuleOptions,
     ) -> Result<(), RuntimeError> {
         let name = name.into();
         let code: ModuleCodeString = code.into();
@@ -63,7 +63,6 @@ impl Pool {
             name.clone(),
             ModuleDefinition {
                 code: code.as_str().into(),
-                options,
             },
         );
 
@@ -78,6 +77,8 @@ impl Pool {
 pub struct PoolBuilder {
     modules: HashMap<String, ModuleDefinition>,
     max_size: usize,
+    allowed_hosts: Option<Vec<String>>,
+    evaluation_timeout: Option<std::time::Duration>,
 }
 
 impl PoolBuilder {
@@ -86,6 +87,8 @@ impl PoolBuilder {
         Self {
             modules: HashMap::new(),
             max_size: 10,
+            allowed_hosts: None,
+            evaluation_timeout: None,
         }
     }
 
@@ -95,19 +98,35 @@ impl PoolBuilder {
         self
     }
 
+    /// Set the allowed hosts for all workers and modules
+    pub fn with_allowed_hosts(mut self, hosts: Vec<String>) -> Self {
+        self.allowed_hosts = Some(hosts);
+        self
+    }
+
+    /// Set the evaluation timeout for module loading in all workers
+    pub fn with_evaluation_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.evaluation_timeout = Some(timeout);
+        self
+    }
+
+    /// Set domain permission for all workers and modules
+    pub fn with_domain_permission(mut self, permission: DomainPermission) -> Self {
+        self.allowed_hosts = permission.to_allowed_hosts();
+        self
+    }
+
     /// Add a module to be loaded in all workers
     pub fn add_module<Code: Into<ModuleCodeString>>(
         mut self,
         name: impl Into<String>,
         code: Code,
-        options: ModuleOptions,
     ) -> Self {
         let code: ModuleCodeString = code.into();
         self.modules.insert(
             name.into(),
             ModuleDefinition {
                 code: code.as_str().into(),
-                options,
             },
         );
         self
@@ -116,7 +135,17 @@ impl PoolBuilder {
     /// Build the pool
     pub fn build(self) -> Result<Pool, RuntimeError> {
         let cache = SharedCache::new();
-        let manager = WorkerManager::new(self.modules, cache);
+
+        // Construct WorkerOptions from individual fields
+        let worker_options = WorkerOptions {
+            evaluation_timeout: self.evaluation_timeout.unwrap_or(Duration::from_secs(30)),
+            domain_permission: match self.allowed_hosts {
+                Some(hosts) => DomainPermission::Allow(hosts),
+                None => DomainPermission::Deny,
+            },
+        };
+
+        let manager = WorkerManager::new(self.modules, cache, worker_options);
 
         let pool = deadpool::managed::Pool::builder(manager.clone())
             .max_size(self.max_size)
@@ -142,7 +171,6 @@ impl Default for PoolBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     #[tokio::test]
     async fn test_pool_basic() {
@@ -157,14 +185,7 @@ mod tests {
 
         let pool = Pool::builder()
             .max_size(2)
-            .add_module(
-                "math",
-                js_code.to_string(),
-                ModuleOptions {
-                    timeout: Duration::from_secs(5),
-                    domain_permission: super::super::options::DomainPermission::Deny,
-                },
-            )
+            .add_module("math", js_code.to_string())
             .build()
             .unwrap();
 
@@ -192,12 +213,8 @@ mod tests {
 
         let pool = Pool::builder()
             .max_size(2)
-            .add_module("add", add_code.to_string(), ModuleOptions::default())
-            .add_module(
-                "multiply",
-                multiply_code.to_string(),
-                ModuleOptions::default(),
-            )
+            .add_module("add", add_code.to_string())
+            .add_module("multiply", multiply_code.to_string())
             .build()
             .unwrap();
 
@@ -236,7 +253,7 @@ mod tests {
 
         let pool = Pool::builder()
             .max_size(2)
-            .add_module("add", add_code.to_string(), ModuleOptions::default())
+            .add_module("add", add_code.to_string())
             .build()
             .unwrap();
 
@@ -265,6 +282,7 @@ mod tests {
         ));
 
         assert!(result_function.is_err());
+        // With proper multi-module support, the function name is just the function name
         assert!(matches!(
             result_function.unwrap_err(),
             RuntimeError::MissingExportedFunction(name) if name == "missingFunctionTest"
@@ -282,7 +300,7 @@ mod tests {
 
         let pool = Pool::builder()
             .max_size(2)
-            .add_module("add", add_code.to_string(), ModuleOptions::default())
+            .add_module("add", add_code.to_string())
             .build()
             .unwrap();
 
@@ -292,13 +310,9 @@ mod tests {
             export default { subtract };
         "#;
 
-        pool.add_module(
-            "subtract",
-            subtract_code.to_string(),
-            ModuleOptions::default(),
-        )
-        .await
-        .unwrap();
+        pool.add_module("subtract", subtract_code.to_string())
+            .await
+            .unwrap();
 
         let result: i32 = pool
             .exec(
@@ -328,11 +342,7 @@ mod tests {
 
         let pool = Pool::builder()
             .max_size(2)
-            .add_module(
-                "math_utils",
-                math_utils.to_string(),
-                ModuleOptions::default(),
-            )
+            .add_module("math_utils", math_utils.to_string())
             .build()
             .unwrap();
 
@@ -404,7 +414,7 @@ mod tests {
 
         let pool = Pool::builder()
             .max_size(2)
-            .add_module("mixed", mixed_code.to_string(), ModuleOptions::default())
+            .add_module("mixed", mixed_code.to_string())
             .build()
             .unwrap();
 
@@ -448,7 +458,7 @@ mod tests {
 
         let pool = Pool::builder()
             .max_size(3)
-            .add_module("counter", js_code.to_string(), ModuleOptions::default())
+            .add_module("counter", js_code.to_string())
             .build()
             .unwrap();
 
@@ -475,11 +485,7 @@ mod tests {
 
         let pool = Pool::builder()
             .max_size(2)
-            .add_module(
-                "versioned",
-                initial_code.to_string(),
-                ModuleOptions::default(),
-            )
+            .add_module("versioned", initial_code.to_string())
             .build()
             .unwrap();
 
@@ -505,13 +511,9 @@ mod tests {
             export default { getValue };
         "#;
 
-        pool.add_module(
-            "versioned",
-            updated_code.to_string(),
-            ModuleOptions::default(),
-        )
-        .await
-        .unwrap();
+        pool.add_module("versioned", updated_code.to_string())
+            .await
+            .unwrap();
 
         assert_eq!(pool.manager.version(), 1);
 
@@ -538,13 +540,9 @@ mod tests {
             export default { getValue };
         "#;
 
-        pool.add_module(
-            "versioned",
-            updated_code_v2.to_string(),
-            ModuleOptions::default(),
-        )
-        .await
-        .unwrap();
+        pool.add_module("versioned", updated_code_v2.to_string())
+            .await
+            .unwrap();
 
         assert_eq!(pool.manager.version(), 2);
 

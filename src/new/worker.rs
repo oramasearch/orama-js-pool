@@ -7,65 +7,106 @@ use tracing::info;
 use crate::orama_extension::SharedCache;
 
 use super::{
-    options::{ExecOptions, ModuleOptions},
+    options::ExecOptions,
     parameters::TryIntoFunctionParameters,
     runtime::{Runtime, RuntimeError},
 };
 
-/// A loaded module with its runtime and metadata
-struct LoadedModule {
-    runtime: Runtime<serde_json::Value, serde_json::Value>,
-    code: ModuleCodeString,
-    options: ModuleOptions,
+use std::sync::Arc;
+
+/// Metadata about a loaded module
+struct ModuleInfo {
+    code: Arc<str>,
 }
 
-/// Worker that can execute multiple modules
+/// Worker that can execute multiple modules with a shared runtime
 pub struct Worker {
-    modules: HashMap<String, LoadedModule>,
+    runtime: Option<Runtime<serde_json::Value, serde_json::Value>>,
+    modules: HashMap<String, ModuleInfo>,
     cache: SharedCache,
     version: u64,
+    allowed_hosts: Option<Vec<String>>,
+    evaluation_timeout: std::time::Duration,
 }
 
 impl Worker {
-    /// Create a new worker with the given modules and cache
-    pub(crate) fn new(cache: SharedCache, version: u64) -> Self {
+    /// Create a new worker with the given cache, version, and settings
+    pub(crate) fn new(
+        cache: SharedCache,
+        version: u64,
+        allowed_hosts: Option<Vec<String>>,
+        evaluation_timeout: std::time::Duration,
+    ) -> Self {
         Self {
+            runtime: None,
             modules: HashMap::new(),
             cache,
             version,
+            allowed_hosts,
+            evaluation_timeout,
         }
     }
 
+    pub fn build() -> WorkerBuilder {
+        WorkerBuilder::default()
+    }
+
     /// Add a module to this worker
-    pub async fn add_module<Code>(
-        &mut self,
-        name: String,
-        code: Code,
-        options: ModuleOptions,
-    ) -> Result<(), RuntimeError>
+    pub async fn add_module<Code>(&mut self, name: String, code: Code) -> Result<(), RuntimeError>
     where
         Code: Into<ModuleCodeString> + Send + 'static,
     {
         let code_string: ModuleCodeString = code.into();
-        let (code_for_runtime, code_for_storage) = code_string.into_cheap_copy();
+        let specifier = format!("file:/{name}");
 
-        info!("Loading module: {}", name);
+        info!("Adding module: {} with specifier {}", name, specifier);
 
-        let runtime = Runtime::<serde_json::Value, serde_json::Value>::new(
-            code_for_runtime,
-            options.domain_permission.to_allowed_hosts(),
-            options.timeout,
+        // Store module info
+        self.modules.insert(
+            name.clone(),
+            ModuleInfo {
+                code: code_string.as_str().into(),
+            },
+        );
+
+        // Create runtime if it doesn't exist
+        if self.runtime.is_none() {
+            info!("Creating new runtime");
+            let runtime = Runtime::<serde_json::Value, serde_json::Value>::new(
+                self.allowed_hosts.clone(),
+                self.evaluation_timeout,
+                self.cache.clone(),
+            )
+            .await?;
+            self.runtime = Some(runtime);
+        }
+
+        // Load this module into the runtime
+        if let Some(runtime) = &mut self.runtime {
+            runtime.load_module(name.clone(), code_string).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Rebuild the runtime with all currently registered modules
+    async fn rebuild_runtime(&mut self) -> Result<(), RuntimeError> {
+        info!("Rebuilding runtime with {} modules", self.modules.len());
+
+        // Create a new runtime
+        let mut runtime = Runtime::<serde_json::Value, serde_json::Value>::new(
+            self.allowed_hosts.clone(),
+            self.evaluation_timeout,
             self.cache.clone(),
         )
         .await?;
 
-        let loaded_module = LoadedModule {
-            runtime,
-            code: code_for_storage,
-            options,
-        };
+        // Load all modules into the new runtime
+        for (name, info) in &self.modules {
+            runtime.load_module(name.clone(), info.code.clone()).await?;
+        }
 
-        self.modules.insert(name, loaded_module);
+        self.runtime = Some(runtime);
 
         Ok(())
     }
@@ -82,45 +123,35 @@ impl Worker {
         Input: TryIntoFunctionParameters + Send + 'static,
         Output: DeserializeOwned + Send + 'static,
     {
-        let module = self
-            .modules
-            .get_mut(module_name)
-            .ok_or_else(|| RuntimeError::MissingModule(module_name.to_string()))?;
-
-        // Check if runtime is still alive, recreate if needed
-        if !module.runtime.is_alive() {
-            info!("Runtime not alive, recreating for module: {}", module_name);
-            let code = std::mem::replace(&mut module.code, String::new().into());
-            let (code_for_runtime, code_for_storage) = code.into_cheap_copy();
-            let options = module.options.clone();
-
-            let runtime = Runtime::<serde_json::Value, serde_json::Value>::new(
-                code_for_runtime,
-                options.domain_permission.to_allowed_hosts(),
-                options.timeout,
-                self.cache.clone(),
-            )
-            .await?;
-
-            module.runtime = runtime;
-            module.code = code_for_storage;
+        // Check if module exists
+        if !self.modules.contains_key(module_name) {
+            return Err(RuntimeError::MissingModule(module_name.to_string()));
         }
 
-        module
-            .runtime
-            .check_function(function_name.to_string(), false)
+        // Check if runtime is alive, recreate if needed
+        let runtime = match &mut self.runtime {
+            Some(rt) if rt.is_alive() => rt,
+            _ => {
+                info!("Runtime not alive or missing, rebuilding...");
+                self.rebuild_runtime().await?;
+                self.runtime.as_mut().unwrap()
+            }
+        };
+
+        // Check if the function exists in the module
+        runtime
+            .check_function(module_name, function_name.to_string())
             .await?;
 
         let params_tuple = params.try_into_function_parameter()?;
         let params_value = serde_json::to_value(params_tuple.0)?;
 
-        let result: serde_json::Value = module
-            .runtime
+        let result: serde_json::Value = runtime
             .exec(
+                module_name,
                 function_name.to_string(),
                 params_value,
                 exec_options.stdout_sender,
-                // TODO: fix also the allowd hosts
                 None,
                 exec_options.timeout,
             )
@@ -131,10 +162,9 @@ impl Worker {
         Ok(output)
     }
 
-    /// Check if the worker is alive (all runtimes are alive)
+    /// Check if the worker is alive
     pub fn is_alive(&self) -> bool {
-        // Check if at least some modules have alive runtimes
-        self.modules.values().any(|m| m.runtime.is_alive())
+        self.runtime.as_ref().is_some_and(|rt| rt.is_alive())
     }
 
     /// Get the version of this worker
@@ -150,14 +180,11 @@ impl Worker {
 
 /// Builder for creating a Worker
 pub struct WorkerBuilder {
-    modules: Vec<(String, ModuleDefinition)>,
+    modules: Vec<(String, ModuleCodeString)>,
     cache: Option<SharedCache>,
     version: Option<u64>,
-}
-
-struct ModuleDefinition {
-    code: ModuleCodeString,
-    options: ModuleOptions,
+    allowed_hosts: Option<Vec<String>>,
+    evaluation_timeout: Option<std::time::Duration>,
 }
 
 impl WorkerBuilder {
@@ -167,6 +194,8 @@ impl WorkerBuilder {
             modules: Vec::new(),
             cache: None,
             version: None,
+            allowed_hosts: None,
+            evaluation_timeout: None,
         }
     }
 
@@ -175,11 +204,9 @@ impl WorkerBuilder {
         mut self,
         name: impl Into<String>,
         code: Code,
-        options: ModuleOptions,
     ) -> Self {
         let code: ModuleCodeString = code.into();
-        self.modules
-            .push((name.into(), ModuleDefinition { code, options }));
+        self.modules.push((name.into(), code));
         self
     }
 
@@ -195,15 +222,31 @@ impl WorkerBuilder {
         self
     }
 
+    /// Set the allowed hosts for all modules
+    pub fn with_allowed_hosts(mut self, hosts: Vec<String>) -> Self {
+        self.allowed_hosts = Some(hosts);
+        self
+    }
+
+    /// Set the evaluation timeout for module loading
+    pub fn with_evaluation_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.evaluation_timeout = Some(timeout);
+        self
+    }
+
     /// Build the worker
     pub async fn build(self) -> Result<Worker, RuntimeError> {
         let cache = self.cache.unwrap_or_default();
         let version = self.version.unwrap_or(0);
+        let allowed_hosts = self.allowed_hosts;
+        let evaluation_timeout = self
+            .evaluation_timeout
+            .unwrap_or(std::time::Duration::from_secs(5));
 
-        let mut worker = Worker::new(cache, version);
+        let mut worker = Worker::new(cache, version, allowed_hosts, evaluation_timeout);
 
-        for (name, def) in self.modules {
-            worker.add_module(name, def.code, def.options).await?;
+        for (name, code) in self.modules {
+            worker.add_module(name, code).await?;
         }
 
         Ok(worker)

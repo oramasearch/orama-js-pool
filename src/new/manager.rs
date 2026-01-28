@@ -14,7 +14,7 @@ use tracing::info;
 use crate::orama_extension::SharedCache;
 
 use super::{
-    options::ModuleOptions,
+    options::WorkerOptions,
     runtime::RuntimeError,
     worker::{Worker, WorkerBuilder},
 };
@@ -23,7 +23,6 @@ use super::{
 #[derive(Clone)]
 pub struct ModuleDefinition {
     pub code: Arc<str>,
-    pub options: ModuleOptions,
 }
 
 /// Manager for creating and recycling Workers in the pool
@@ -32,15 +31,21 @@ pub struct WorkerManager {
     modules: Arc<RwLock<HashMap<String, ModuleDefinition>>>,
     cache: SharedCache,
     version: Arc<AtomicU64>,
+    worker_options: WorkerOptions,
 }
 
 impl WorkerManager {
     /// Create a new WorkerManager
-    pub fn new(modules: HashMap<String, ModuleDefinition>, cache: SharedCache) -> Self {
+    pub fn new(
+        modules: HashMap<String, ModuleDefinition>,
+        cache: SharedCache,
+        worker_options: WorkerOptions,
+    ) -> Self {
         Self {
             modules: Arc::new(RwLock::new(modules)),
             cache,
             version: Arc::new(AtomicU64::new(0)),
+            worker_options,
         }
     }
 
@@ -83,21 +88,27 @@ impl Manager for WorkerManager {
         let modules = self.modules.read().unwrap().clone();
         let version = self.version.load(Ordering::Acquire);
         let cache = self.cache.clone();
+        let worker_options = self.worker_options.clone();
 
         async move {
             info!("Creating new worker");
 
-            let mut builder = WorkerBuilder::new();
-
-            for (name, def) in modules {
-                builder = builder.add_module(name, def.code, def.options);
-            }
-
-            let worker = builder
+            let mut builder = WorkerBuilder::new()
                 .with_cache(cache)
                 .with_version(version)
-                .build()
-                .await?;
+                .with_allowed_hosts(
+                    worker_options
+                        .domain_permission
+                        .to_allowed_hosts()
+                        .unwrap_or_default(),
+                )
+                .with_evaluation_timeout(worker_options.evaluation_timeout);
+
+            for (name, def) in modules {
+                builder = builder.add_module(name, def.code);
+            }
+
+            let worker = builder.build().await?;
 
             info!("Worker created successfully with version {}", version);
             Ok(worker)

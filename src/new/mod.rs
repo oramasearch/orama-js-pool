@@ -6,7 +6,9 @@ mod runtime;
 mod worker;
 
 pub use manager::{ModuleDefinition, WorkerManager};
-pub use options::{DomainPermission, ExecOptions, ModuleOptions, ResolvedExecOptions};
+pub use options::{
+    DomainPermission, ExecOptions, ModuleOptions, ResolvedExecOptions, WorkerOptions,
+};
 pub use parameters::{FunctionParameters, TryIntoFunctionParameters};
 pub use pool::{Pool, PoolBuilder};
 pub use runtime::{Runtime, RuntimeError};

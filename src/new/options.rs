@@ -91,6 +91,38 @@ impl Default for ExecOptions {
     }
 }
 
+/// Worker-level options that apply to all modules in a worker
+#[derive(Debug, Clone)]
+pub struct WorkerOptions {
+    pub evaluation_timeout: Duration,
+    pub domain_permission: DomainPermission,
+}
+
+impl WorkerOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_evaluation_timeout(mut self, timeout: Duration) -> Self {
+        self.evaluation_timeout = timeout;
+        self
+    }
+
+    pub fn with_domain_permission(mut self, permission: DomainPermission) -> Self {
+        self.domain_permission = permission;
+        self
+    }
+}
+
+impl Default for WorkerOptions {
+    fn default() -> Self {
+        Self {
+            evaluation_timeout: Duration::from_secs(5),
+            domain_permission: DomainPermission::Deny,
+        }
+    }
+}
+
 /// Resolved execution options after merging module and runtime options
 #[derive(Debug, Clone)]
 pub struct ResolvedExecOptions {
