@@ -15,7 +15,7 @@ use super::{
 /// A loaded module with its runtime and metadata
 struct LoadedModule {
     runtime: Runtime<serde_json::Value, serde_json::Value>,
-    code: String,
+    code: ModuleCodeString,
     options: ModuleOptions,
 }
 
@@ -47,12 +47,12 @@ impl Worker {
         Code: Into<ModuleCodeString> + Send + 'static,
     {
         let code_string: ModuleCodeString = code.into();
-        let code_clone = code_string.as_str().to_string();
+        let (code_for_runtime, code_for_storage) = code_string.into_cheap_copy();
 
         info!("Loading module: {}", name);
 
         let runtime = Runtime::<serde_json::Value, serde_json::Value>::new(
-            code_string,
+            code_for_runtime,
             options.domain_permission.to_allowed_hosts(),
             options.timeout,
             self.cache.clone(),
@@ -61,7 +61,7 @@ impl Worker {
 
         let loaded_module = LoadedModule {
             runtime,
-            code: code_clone,
+            code: code_for_storage,
             options,
         };
 
@@ -90,11 +90,12 @@ impl Worker {
         // Check if runtime is still alive, recreate if needed
         if !module.runtime.is_alive() {
             info!("Runtime not alive, recreating for module: {}", module_name);
-            let code = module.code.clone();
+            let code = std::mem::replace(&mut module.code, String::new().into());
+            let (code_for_runtime, code_for_storage) = code.into_cheap_copy();
             let options = module.options.clone();
 
             let runtime = Runtime::<serde_json::Value, serde_json::Value>::new(
-                code.clone(),
+                code_for_runtime,
                 options.domain_permission.to_allowed_hosts(),
                 options.timeout,
                 self.cache.clone(),
@@ -102,19 +103,17 @@ impl Worker {
             .await?;
 
             module.runtime = runtime;
+            module.code = code_for_storage;
         }
 
-        // Check if the function exists
         module
             .runtime
             .check_function(function_name.to_string(), false)
             .await?;
 
-        // Convert input to serde_json::Value
         let params_tuple = params.try_into_function_parameter()?;
         let params_value = serde_json::to_value(params_tuple.0)?;
 
-        // Execute the function
         let result: serde_json::Value = module
             .runtime
             .exec(
@@ -157,7 +156,7 @@ pub struct WorkerBuilder {
 }
 
 struct ModuleDefinition {
-    code: String,
+    code: ModuleCodeString,
     options: ModuleOptions,
 }
 
@@ -179,13 +178,8 @@ impl WorkerBuilder {
         options: ModuleOptions,
     ) -> Self {
         let code: ModuleCodeString = code.into();
-        self.modules.push((
-            name.into(),
-            ModuleDefinition {
-                code: code.as_str().to_string(),
-                options,
-            },
-        ));
+        self.modules
+            .push((name.into(), ModuleDefinition { code, options }));
         self
     }
 

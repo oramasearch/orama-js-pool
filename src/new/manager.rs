@@ -22,7 +22,7 @@ use super::{
 /// Definition of a module to be loaded into workers
 #[derive(Clone)]
 pub struct ModuleDefinition {
-    pub code: String,
+    pub code: Arc<str>,
     pub options: ModuleOptions,
 }
 

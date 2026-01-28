@@ -62,7 +62,7 @@ impl Pool {
         modules.insert(
             name.clone(),
             ModuleDefinition {
-                code: code.as_str().to_string(),
+                code: code.as_str().into(),
                 options,
             },
         );
@@ -106,7 +106,7 @@ impl PoolBuilder {
         self.modules.insert(
             name.into(),
             ModuleDefinition {
-                code: code.as_str().to_string(),
+                code: code.as_str().into(),
                 options,
             },
         );
