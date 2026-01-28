@@ -77,7 +77,7 @@ impl Pool {
 pub struct PoolBuilder {
     modules: HashMap<String, ModuleDefinition>,
     max_size: usize,
-    allowed_hosts: Option<Vec<String>>,
+    domain_permission: Option<DomainPermission>,
     evaluation_timeout: Option<std::time::Duration>,
 }
 
@@ -87,7 +87,7 @@ impl PoolBuilder {
         Self {
             modules: HashMap::new(),
             max_size: 10,
-            allowed_hosts: None,
+            domain_permission: None,
             evaluation_timeout: None,
         }
     }
@@ -100,7 +100,7 @@ impl PoolBuilder {
 
     /// Set the allowed hosts for all workers and modules
     pub fn with_allowed_hosts(mut self, hosts: Vec<String>) -> Self {
-        self.allowed_hosts = Some(hosts);
+        self.domain_permission = Some(DomainPermission::Allow(hosts));
         self
     }
 
@@ -112,7 +112,7 @@ impl PoolBuilder {
 
     /// Set domain permission for all workers and modules
     pub fn with_domain_permission(mut self, permission: DomainPermission) -> Self {
-        self.allowed_hosts = permission.to_allowed_hosts();
+        self.domain_permission = Some(permission);
         self
     }
 
@@ -138,11 +138,8 @@ impl PoolBuilder {
 
         // Construct WorkerOptions from individual fields
         let worker_options = WorkerOptions {
-            evaluation_timeout: self.evaluation_timeout.unwrap_or(Duration::from_secs(30)),
-            domain_permission: match self.allowed_hosts {
-                Some(hosts) => DomainPermission::Allow(hosts),
-                None => DomainPermission::Deny,
-            },
+            evaluation_timeout: self.evaluation_timeout.unwrap_or(Duration::from_secs(5)),
+            domain_permission: self.domain_permission.unwrap_or(DomainPermission::DenyAll),
         };
 
         let manager = WorkerManager::new(self.modules, cache, worker_options);

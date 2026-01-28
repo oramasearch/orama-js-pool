@@ -3,21 +3,7 @@ use std::time::Duration;
 
 use crate::OutputChannel;
 
-#[derive(Debug, Clone)]
-pub enum DomainPermission {
-    // TODO: add denyAll, AllowAll, Deny(Vec<String>)
-    Deny,
-    Allow(Vec<String>),
-}
-
-impl DomainPermission {
-    pub fn to_allowed_hosts(&self) -> Option<Vec<String>> {
-        match self {
-            DomainPermission::Deny => Some(vec![]),
-            DomainPermission::Allow(hosts) => Some(hosts.clone()),
-        }
-    }
-}
+pub use crate::permission::DomainPermission;
 
 #[derive(Debug, Clone)]
 pub struct ModuleOptions {
@@ -45,7 +31,7 @@ impl Default for ModuleOptions {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(30),
-            domain_permission: DomainPermission::Deny,
+            domain_permission: DomainPermission::DenyAll,
         }
     }
 }
@@ -85,7 +71,7 @@ impl Default for ExecOptions {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(30),
-            domain_permission: DomainPermission::Deny,
+            domain_permission: DomainPermission::DenyAll,
             stdout_sender: None,
         }
     }
@@ -118,7 +104,7 @@ impl Default for WorkerOptions {
     fn default() -> Self {
         Self {
             evaluation_timeout: Duration::from_secs(5),
-            domain_permission: DomainPermission::Deny,
+            domain_permission: DomainPermission::DenyAll,
         }
     }
 }

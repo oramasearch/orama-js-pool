@@ -96,12 +96,7 @@ impl Manager for WorkerManager {
             let mut builder = WorkerBuilder::new()
                 .with_cache(cache)
                 .with_version(version)
-                .with_allowed_hosts(
-                    worker_options
-                        .domain_permission
-                        .to_allowed_hosts()
-                        .unwrap_or_default(),
-                )
+                .with_domain_permission(worker_options.domain_permission)
                 .with_evaluation_timeout(worker_options.evaluation_timeout);
 
             for (name, def) in modules {

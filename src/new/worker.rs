@@ -7,7 +7,7 @@ use tracing::info;
 use crate::orama_extension::SharedCache;
 
 use super::{
-    options::ExecOptions,
+    options::{DomainPermission, ExecOptions},
     parameters::TryIntoFunctionParameters,
     runtime::{Runtime, RuntimeError},
 };
@@ -25,7 +25,7 @@ pub struct Worker {
     modules: HashMap<String, ModuleInfo>,
     cache: SharedCache,
     version: u64,
-    allowed_hosts: Option<Vec<String>>,
+    domain_permission: DomainPermission,
     evaluation_timeout: std::time::Duration,
 }
 
@@ -34,7 +34,7 @@ impl Worker {
     pub(crate) fn new(
         cache: SharedCache,
         version: u64,
-        allowed_hosts: Option<Vec<String>>,
+        domain_permission: DomainPermission,
         evaluation_timeout: std::time::Duration,
     ) -> Self {
         Self {
@@ -42,7 +42,7 @@ impl Worker {
             modules: HashMap::new(),
             cache,
             version,
-            allowed_hosts,
+            domain_permission,
             evaluation_timeout,
         }
     }
@@ -73,7 +73,7 @@ impl Worker {
         if self.runtime.is_none() {
             info!("Creating new runtime");
             let runtime = Runtime::<serde_json::Value, serde_json::Value>::new(
-                self.allowed_hosts.clone(),
+                self.domain_permission.clone(),
                 self.evaluation_timeout,
                 self.cache.clone(),
             )
@@ -95,7 +95,7 @@ impl Worker {
 
         // Create a new runtime
         let mut runtime = Runtime::<serde_json::Value, serde_json::Value>::new(
-            self.allowed_hosts.clone(),
+            self.domain_permission.clone(),
             self.evaluation_timeout,
             self.cache.clone(),
         )
@@ -152,7 +152,7 @@ impl Worker {
                 function_name.to_string(),
                 params_value,
                 exec_options.stdout_sender,
-                None,
+                exec_options.domain_permission,
                 exec_options.timeout,
             )
             .await?;
@@ -183,7 +183,7 @@ pub struct WorkerBuilder {
     modules: Vec<(String, ModuleCodeString)>,
     cache: Option<SharedCache>,
     version: Option<u64>,
-    allowed_hosts: Option<Vec<String>>,
+    domain_permission: Option<DomainPermission>,
     evaluation_timeout: Option<std::time::Duration>,
 }
 
@@ -194,7 +194,7 @@ impl WorkerBuilder {
             modules: Vec::new(),
             cache: None,
             version: None,
-            allowed_hosts: None,
+            domain_permission: None,
             evaluation_timeout: None,
         }
     }
@@ -224,7 +224,13 @@ impl WorkerBuilder {
 
     /// Set the allowed hosts for all modules
     pub fn with_allowed_hosts(mut self, hosts: Vec<String>) -> Self {
-        self.allowed_hosts = Some(hosts);
+        self.domain_permission = Some(DomainPermission::Allow(hosts));
+        self
+    }
+
+    /// Set the domain permission for all modules
+    pub fn with_domain_permission(mut self, permission: DomainPermission) -> Self {
+        self.domain_permission = Some(permission);
         self
     }
 
@@ -238,12 +244,12 @@ impl WorkerBuilder {
     pub async fn build(self) -> Result<Worker, RuntimeError> {
         let cache = self.cache.unwrap_or_default();
         let version = self.version.unwrap_or(0);
-        let allowed_hosts = self.allowed_hosts;
+        let domain_permission = self.domain_permission.unwrap_or(DomainPermission::DenyAll);
         let evaluation_timeout = self
             .evaluation_timeout
             .unwrap_or(std::time::Duration::from_secs(5));
 
-        let mut worker = Worker::new(cache, version, allowed_hosts, evaluation_timeout);
+        let mut worker = Worker::new(cache, version, domain_permission, evaluation_timeout);
 
         for (name, code) in self.modules {
             worker.add_module(name, code).await?;

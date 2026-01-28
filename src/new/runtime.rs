@@ -72,7 +72,7 @@ enum RuntimeEvent {
         function_name: String,
         input_params: String,
         stdout_sender: Option<Arc<tokio::sync::broadcast::Sender<(OutputChannel, String)>>>,
-        allowed_hosts: Option<Vec<String>>,
+        domain_permission: super::options::DomainPermission,
         sender: tokio::sync::oneshot::Sender<Result<serde_json::Value, RuntimeError>>,
     },
 }
@@ -100,7 +100,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
     Runtime<Input, Output>
 {
     pub async fn new(
-        allowed_hosts: Option<Vec<String>>,
+        domain_permission: super::options::DomainPermission,
         evaluation_timeout: Duration,
         shared_cache: SharedCache,
     ) -> Result<Self, RuntimeError> {
@@ -131,7 +131,9 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                         ),
                         deno_crypto::deno_crypto::init_ops(None),
                         crate::orama_extension::orama_extension::init_ops(
-                            CustomPermissions { allowed_hosts },
+                            CustomPermissions {
+                                domain_permission: domain_permission.clone(),
+                            },
                             ChannelStorage::<Output> {
                                 stream_handler: None,
                             },
@@ -195,11 +197,11 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                             function_name,
                             input_params,
                             stdout_sender,
-                            allowed_hosts,
+                            domain_permission,
                             sender,
                         } => {
                             debug!("Overriding state");
-                            update_inner_state(&mut js_runtime, stdout_sender, allowed_hosts);
+                            update_inner_state(&mut js_runtime, stdout_sender, domain_permission);
                             debug!("State overridden");
 
                             let result = execute_function(
@@ -364,7 +366,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
         function_name: String,
         params: Input,
         stdout_sender: Option<Arc<tokio::sync::broadcast::Sender<(OutputChannel, String)>>>,
-        allowed_hosts: Option<Vec<String>>,
+        domain_permission: super::options::DomainPermission,
         timeout: Duration,
     ) -> Result<Output, RuntimeError> {
         if !self.is_alive() {
@@ -395,7 +397,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                 function_name,
                 input_params,
                 stdout_sender,
-                allowed_hosts,
+                domain_permission,
                 sender,
             })
             .await
@@ -617,7 +619,7 @@ globalThis.{GLOBAL_VARIABLE_NAME} = isAsync ? await result : result;
 fn update_inner_state(
     js_runtime: &mut deno_core::JsRuntime,
     stdout_sender: Option<Arc<tokio::sync::broadcast::Sender<(OutputChannel, String)>>>,
-    allowed_hosts: Option<Vec<String>>,
+    domain_permission: super::options::DomainPermission,
 ) {
     let rc_state = js_runtime.op_state();
     let mut rc_state_ref = rc_state.borrow_mut();
@@ -633,7 +635,7 @@ fn update_inner_state(
         None
     };
     state.put(StdoutHandler(stdout_handler));
-    state.put(CustomPermissions { allowed_hosts });
+    state.put(CustomPermissions { domain_permission });
     drop(rc_state_ref);
     drop(rc_state);
 }

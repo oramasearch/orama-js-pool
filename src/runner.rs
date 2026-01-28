@@ -14,7 +14,7 @@ use crate::{
         orama_extension, ChannelStorage, OutputChannel, SharedCache, StdoutHandler, StdoutHandlerFn,
     },
     parameters::TryIntoFunctionParameters,
-    permission::CustomPermissions,
+    permission::{CustomPermissions, DomainPermission},
 };
 
 deno_core::extension!(deno_telemetry, esm = ["telemetry.ts", "util.ts"],);
@@ -252,7 +252,12 @@ pub async fn load_code<
                     ),
                     deno_crypto::deno_crypto::init_ops(None), // deno_crypto
                     orama_extension::init_ops(
-                        CustomPermissions { allowed_hosts },
+                        CustomPermissions {
+                            domain_permission: match allowed_hosts {
+                                Some(hosts) => DomainPermission::Allow(hosts),
+                                None => DomainPermission::DenyAll,
+                            },
+                        },
                         ChannelStorage::<Output> {
                             stream_handler: None,
                         },
@@ -563,7 +568,12 @@ fn update_inner_state(
         None
     };
     state.put(StdoutHandler(stdout_handler));
-    state.put(CustomPermissions { allowed_hosts });
+    state.put(CustomPermissions {
+        domain_permission: match allowed_hosts {
+            Some(hosts) => DomainPermission::Allow(hosts),
+            None => DomainPermission::DenyAll,
+        },
+    });
     drop(rc_state_ref);
     drop(rc_state);
 }
