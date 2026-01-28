@@ -34,17 +34,19 @@ pub enum RuntimeError {
     UnknownExecutionError(Box<deno_core::error::CoreError>),
     #[error("The JS initialization took too long")]
     InitTimeout,
-    #[error("The script has a default export but it is not an object")]
+    #[error("The default export is not an object")]
     DefaultExportIsNotAnObject,
-    #[error("The script has a default export but it does not provide an export named '{0}'")]
-    NoExportedFunction(String),
-    #[error("The script has a default export with the correct name, but type is wrong. Expected a function")]
-    ExportedElementNotAFunction,
+    #[error("Module '{0}' not found")]
+    MissingModule(String),
+    #[error("Exported function '{0}' not found in default export")]
+    MissingExportedFunction(String),
+    #[error("Export '{0}' exists but is not a function")]
+    ExportIsNotAFunction(String),
     #[error("The script took too long to execute")]
     ExecTimeout,
     #[error("Serde error: {0}")]
     SerdeError(#[from] serde_json::Error),
-    #[error("compilation error: {0}")]
+    #[error("Compilation error: {0}")]
     CompilationError(Box<deno_core::error::JsError>),
     #[error("Parameter error: {0}")]
     ParameterError(#[from] JSRunnerError),
@@ -310,8 +312,8 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
         match output {
             0 => Ok(()),
             1 => Err(RuntimeError::DefaultExportIsNotAnObject),
-            2 => Err(RuntimeError::NoExportedFunction(function_name)),
-            3 => Err(RuntimeError::ExportedElementNotAFunction),
+            2 => Err(RuntimeError::MissingExportedFunction(function_name.clone())),
+            3 => Err(RuntimeError::ExportIsNotAFunction(function_name)),
             _ => unreachable!(),
         }
     }

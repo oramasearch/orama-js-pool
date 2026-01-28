@@ -84,7 +84,7 @@ impl Worker {
         let module = self
             .modules
             .get_mut(module_name)
-            .ok_or_else(|| RuntimeError::NoExportedFunction(module_name.to_string()))?;
+            .ok_or_else(|| RuntimeError::MissingModule(module_name.to_string()))?;
 
         // Check if runtime is still alive, recreate if needed
         if !module.runtime.is_alive() {
@@ -102,6 +102,12 @@ impl Worker {
 
             module.runtime = runtime;
         }
+
+        // Check if the function exists
+        module
+            .runtime
+            .check_function(function_name.to_string(), false)
+            .await?;
 
         // Convert input to serde_json::Value
         let params_tuple = params.try_into_function_parameter()?;

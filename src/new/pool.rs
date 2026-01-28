@@ -249,7 +249,7 @@ mod tests {
 
         let result_module: Result<i32, RuntimeError> = pool
             .exec(
-                "missingModule",
+                "missingModuleTest",
                 "add",
                 vec![serde_json::json!(5), serde_json::json!(3)],
                 ExecOptions::new(),
@@ -259,7 +259,7 @@ mod tests {
         let result_function: Result<i32, RuntimeError> = pool
             .exec(
                 "add",
-                "missingFunction",
+                "missingFunctionTest",
                 vec![serde_json::json!(5), serde_json::json!(3)],
                 ExecOptions::new(),
             )
@@ -268,13 +268,13 @@ mod tests {
         assert!(result_module.is_err());
         assert!(matches!(
             result_module.unwrap_err(),
-            RuntimeError::NoExportedFunction(name) if name == "missingModule"
+            RuntimeError::MissingModule(name) if name == "missingModuleTest"
         ));
 
         assert!(result_function.is_err());
         assert!(matches!(
             result_function.unwrap_err(),
-            RuntimeError::NoExportedFunction(name) if name == "missingFunction"
+            RuntimeError::MissingExportedFunction(name) if name == "missingFunctionTest"
         ));
     }
 
