@@ -37,7 +37,7 @@ impl Worker {
     }
 
     /// Add a module to this worker
-    pub(crate) async fn add_module<Code>(
+    pub async fn add_module<Code>(
         &mut self,
         name: String,
         code: Code,
