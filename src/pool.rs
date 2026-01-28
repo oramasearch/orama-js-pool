@@ -159,6 +159,10 @@ impl Default for PoolBuilder {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use crate::OutputChannel;
+
     use super::*;
 
     #[tokio::test]
@@ -695,10 +699,8 @@ mod tests {
             .build()
             .unwrap();
 
-        // Deny specific domain
         let deny_list = DomainPermission::Deny(vec!["blocked-domain.test".to_string()]);
 
-        // This should fail because blocked-domain.test is in the deny list
         let result: Result<String, RuntimeError> = pool
             .exec(
                 "fetcher",
@@ -737,5 +739,140 @@ mod tests {
             ),
             "Expected ErrorThrown with DNS/connection error message, got: {err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_exec_timeout() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let slow_code = r#"
+            async function slowCode() {
+                await new Promise(resolve => setTimeout(resolve, 10000));
+                return;
+            }
+            export default { slowCode };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(2)
+            .add_module("slow", slow_code.to_string())
+            .build()
+            .unwrap();
+
+        let result: Result<String, RuntimeError> = pool
+            .exec(
+                "slow",
+                "slowCode",
+                (),
+                ExecOptions::new().with_timeout(Duration::from_millis(10)),
+            )
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, RuntimeError::ExecTimeout),
+            "Expected ExecTimeout error, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_exec_options_override_pool_domain_permission() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let fetch_code = r#"
+            async function fetchData(url) {
+                const response = await fetch(url);
+                return await response.text();
+            }
+            export default { fetchData };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(2)
+            .with_domain_permission(DomainPermission::DenyAll)
+            .add_module("fetcher", fetch_code.to_string())
+            .build()
+            .unwrap();
+
+        let result: Result<String, RuntimeError> = pool
+            .exec(
+                "fetcher",
+                "fetchData",
+                "http://foo.bar",
+                ExecOptions::new()
+                    .with_domain_permission(DomainPermission::AllowAll)
+                    .with_timeout(Duration::from_secs(5)),
+            )
+            .await;
+
+        // it returns error because the domain is invalid (DNS lookup fails), not because it is blacklisted
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, RuntimeError::ErrorThrown(ref js_err) if
+                js_err.message.as_ref().is_some_and(|msg| msg.contains("failed to lookup address"))
+            ),
+            "Expected ErrorThrown with DNS/connection error message, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stdout_streaming() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let log_code = r#"
+            function logAndReturn(a) {
+                console.log('test output');
+                console.error('test error');
+                return a * 2;
+            }
+            export default { logAndReturn };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(2)
+            .add_module("logger", log_code.to_string())
+            .build()
+            .unwrap();
+
+        let (sender, mut receiver) = tokio::sync::broadcast::channel(16);
+
+        let outputs = Arc::new(tokio::sync::RwLock::new(Vec::new()));
+        let fn_outputs = outputs.clone();
+        let collect_task = tokio::spawn(async move {
+            while let Ok((channel, msg)) = receiver.recv().await {
+                let mut v = fn_outputs.write().await;
+                match channel {
+                    OutputChannel::StdOut => v.push(format!("out {msg}")),
+                    OutputChannel::StdErr => v.push(format!("err {msg}")),
+                }
+                drop(v);
+            }
+        });
+
+        let result: i32 = pool
+            .exec(
+                "logger",
+                "logAndReturn",
+                5,
+                ExecOptions::new()
+                    .with_timeout(Duration::from_millis(100))
+                    .with_stdout_sender(std::sync::Arc::new(sender)),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, 10);
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        drop(collect_task);
+
+        let outputs = outputs.read().await;
+        assert!(!outputs.is_empty(), "Expected some console output");
+        assert_eq!(
+            outputs.to_vec(),
+            vec!["out test output\n", "err test error\n"]
+        )
     }
 }
