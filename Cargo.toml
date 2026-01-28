@@ -62,5 +62,10 @@ tracing = "0.1"
 
 [dev-dependencies]
 axum = "0.8.4"
+criterion = { version = "0.5", features = ["async_tokio"] }
 serde = { version = "1", features = ["derive"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+[[bench]]
+name = "bench"
+harness = false
