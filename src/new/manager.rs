@@ -6,8 +6,8 @@ use std::{
     },
 };
 
-use std::future::Future;
 use deadpool::managed::{Manager, Metrics, RecycleError, RecycleResult};
+use std::future::Future;
 
 use tracing::info;
 
@@ -36,10 +36,7 @@ pub struct WorkerManager {
 
 impl WorkerManager {
     /// Create a new WorkerManager
-    pub fn new(
-        modules: HashMap<String, ModuleDefinition>,
-        cache: SharedCache,
-    ) -> Self {
+    pub fn new(modules: HashMap<String, ModuleDefinition>, cache: SharedCache) -> Self {
         Self {
             modules: Arc::new(RwLock::new(modules)),
             cache,
@@ -52,10 +49,13 @@ impl WorkerManager {
         let mut modules_guard = self.modules.write().unwrap();
         *modules_guard = modules;
         drop(modules_guard);
-        
+
         // Increment version to invalidate existing workers
         self.version.fetch_add(1, Ordering::Release);
-        info!("Modules updated, version incremented to {}", self.version.load(Ordering::Acquire));
+        info!(
+            "Modules updated, version incremented to {}",
+            self.version.load(Ordering::Acquire)
+        );
     }
 
     /// Get current module version
@@ -90,14 +90,14 @@ impl Manager for WorkerManager {
             let mut builder = WorkerBuilder::new();
 
             for (name, def) in modules {
-                builder = builder.add_module(
-                    name,
-                    def.code,
-                    def.options,
-                );
+                builder = builder.add_module(name, def.code, def.options);
             }
 
-            let worker = builder.build_with_cache(cache, version).await?;
+            let worker = builder
+                .with_cache(cache)
+                .with_version(version)
+                .build()
+                .await?;
 
             info!("Worker created successfully with version {}", version);
             Ok(worker)

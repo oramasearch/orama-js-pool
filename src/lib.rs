@@ -31,8 +31,5 @@ pub use executor::*;
 )]
 pub use pool::{JSPoolExecutor, JSPoolExecutorConfig};
 
-#[deprecated(
-    since = "0.3.0",
-    note = "Use RuntimeError instead"
-)]
+#[deprecated(since = "0.3.0", note = "Use RuntimeError instead")]
 pub use runner::{ExecOption, JSRunnerError};

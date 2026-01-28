@@ -151,6 +151,8 @@ impl Worker {
 /// Builder for creating a Worker
 pub struct WorkerBuilder {
     modules: Vec<(String, ModuleDefinition)>,
+    cache: Option<SharedCache>,
+    version: Option<u64>,
 }
 
 struct ModuleDefinition {
@@ -163,6 +165,8 @@ impl WorkerBuilder {
     pub fn new() -> Self {
         Self {
             modules: Vec::new(),
+            cache: None,
+            version: None,
         }
     }
 
@@ -184,17 +188,23 @@ impl WorkerBuilder {
         self
     }
 
-    /// Build the worker
-    pub async fn build(self) -> Result<Worker, RuntimeError> {
-        self.build_with_cache(SharedCache::new(), 0).await
+    /// Set the cache for the worker
+    pub fn with_cache(mut self, cache: SharedCache) -> Self {
+        self.cache = Some(cache);
+        self
     }
 
-    /// Build the worker with a specific cache and version
-    pub(crate) async fn build_with_cache(
-        self,
-        cache: SharedCache,
-        version: u64,
-    ) -> Result<Worker, RuntimeError> {
+    /// Set the version for the worker
+    pub fn with_version(mut self, version: u64) -> Self {
+        self.version = Some(version);
+        self
+    }
+
+    /// Build the worker
+    pub async fn build(self) -> Result<Worker, RuntimeError> {
+        let cache = self.cache.unwrap_or_default();
+        let version = self.version.unwrap_or(0);
+
         let mut worker = Worker::new(cache, version);
 
         for (name, def) in self.modules {

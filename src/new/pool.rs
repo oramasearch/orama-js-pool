@@ -56,10 +56,8 @@ impl Pool {
 
         info!("Adding/updating module: {}", name);
 
-        // Get current modules
         let mut modules = self.manager.modules();
 
-        // Add or update the module
         modules.insert(
             name.clone(),
             ModuleDefinition {
@@ -68,7 +66,6 @@ impl Pool {
             },
         );
 
-        // Update the manager (this will increment version and invalidate old workers)
         self.manager.update_modules(modules);
 
         info!("Module {} added/updated successfully", name);
@@ -118,7 +115,7 @@ impl PoolBuilder {
     /// Build the pool
     pub fn build(self) -> Result<Pool, RuntimeError> {
         let cache = SharedCache::new();
-        let manager = WorkerManager::new(self.modules.clone(), cache);
+        let manager = WorkerManager::new(self.modules, cache);
 
         let pool = deadpool::managed::Pool::builder(manager.clone())
             .max_size(self.max_size)
