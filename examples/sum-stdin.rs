@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use orama_js_pool::{ExecOption, JSPoolExecutor, JSRunnerError};
+use orama_js_pool::{ExecOptions, Pool, RuntimeError};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 static CODE_SUM: &str = r#"
@@ -11,18 +11,14 @@ export default { sum };
 "#;
 
 #[tokio::main]
-async fn main() -> Result<(), JSRunnerError> {
+async fn main() -> Result<(), RuntimeError> {
     let _ = tracing_subscriber::fmt::try_init();
 
-    let pool = JSPoolExecutor::<Vec<u8>, u8>::new(
-        CODE_SUM.to_string(),
-        10,   // 10 executors
-        None, // no restriction on http domains
-        Duration::from_millis(200),
-        false, // is_async
-        "sum".to_string(),
-    )
-    .await?;
+    let pool = Pool::builder()
+        .max_size(10) // 10 workers in the pool
+        .with_evaluation_timeout(Duration::from_millis(200))
+        .add_module("calculator", CODE_SUM.to_string())
+        .build()?;
 
     let stdin = tokio::io::stdin();
     let mut c = BufReader::new(stdin);
@@ -48,14 +44,12 @@ async fn main() -> Result<(), JSRunnerError> {
         buff.clear();
 
         let params = vec![a1, a2];
-        let output = pool
+        let output: u8 = pool
             .exec(
+                "calculator", // module name
+                "sum",        // function name
                 params,
-                None, // no stdout stream (set to Some(...) to capture stdout/stderr)
-                ExecOption {
-                    timeout: Duration::from_millis(200),
-                    allowed_hosts: None,
-                },
+                ExecOptions::new().with_timeout(Duration::from_millis(200)),
             )
             .await?;
         println!("sum({a1}, {a2}) == {output}");

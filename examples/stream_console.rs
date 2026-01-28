@@ -1,4 +1,4 @@
-use orama_js_pool::{ExecOption, JSPoolExecutor, JSRunnerError, OutputChannel};
+use orama_js_pool::{ExecOptions, OutputChannel, Pool, RuntimeError};
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,16 +14,12 @@ export default { log_and_error };
 "#;
 
 #[tokio::main]
-async fn main() -> Result<(), JSRunnerError> {
-    let pool = JSPoolExecutor::<serde_json::Value, usize>::new(
-        CODE_LOG.to_string(),
-        2,    // 2 executors
-        None, // no http domain restriction
-        Duration::from_millis(200),
-        false, // not async
-        "log_and_error".to_string(),
-    )
-    .await?;
+async fn main() -> Result<(), RuntimeError> {
+    let pool = Pool::builder()
+        .max_size(2) // 2 workers in the pool
+        .with_evaluation_timeout(Duration::from_millis(200))
+        .add_module("logger", CODE_LOG.to_string())
+        .build()?;
 
     let (sender, mut receiver) = broadcast::channel::<(OutputChannel, String)>(16);
     let input = json!({
@@ -41,14 +37,14 @@ async fn main() -> Result<(), JSRunnerError> {
         }
     });
 
-    let result = pool
+    let result: usize = pool
         .exec(
+            "logger",        // module name
+            "log_and_error", // function name
             input.clone(),
-            Some(Arc::new(sender)),
-            ExecOption {
-                timeout: Duration::from_millis(500),
-                allowed_hosts: None,
-            },
+            ExecOptions::new()
+                .with_timeout(Duration::from_millis(500))
+                .with_stdout_sender(Arc::new(sender)),
         )
         .await?;
 

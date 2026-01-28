@@ -35,7 +35,6 @@ pub struct WorkerManager {
 }
 
 impl WorkerManager {
-    /// Create a new WorkerManager
     pub fn new(
         modules: HashMap<String, ModuleDefinition>,
         cache: SharedCache,
@@ -49,7 +48,6 @@ impl WorkerManager {
         }
     }
 
-    /// Update modules and increment version
     pub fn update_modules(&self, modules: HashMap<String, ModuleDefinition>) {
         let mut modules_guard = self.modules.write().unwrap();
         *modules_guard = modules;

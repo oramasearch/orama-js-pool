@@ -9,7 +9,7 @@ Orama JS Pool provides a pool of JavaScript engines (using the Deno runtime via 
 Here's how to run an async JavaScript function using a pool of JS engines:
 
 ```rust
-use orama_js_pool::{ExecOption, JSPoolExecutor, JSRunnerError};
+use orama_js_pool::{ExecOptions, Pool, RuntimeError};
 use std::time::Duration;
 
 static CODE_ASYNC_SUM: &str = r#"
@@ -21,31 +21,25 @@ export default { async_sum };
 "#;
 
 #[tokio::main]
-async fn main() -> Result<(), JSRunnerError> {
-    // Create a pool with 10 JS engines, running the code above
-    let pool = JSPoolExecutor::<Vec<u8>, u8>::new(
-        CODE_ASYNC_SUM.to_string(),
-        10,                         // number of engines
-        None,                       // no http domain restriction on startup
-        Duration::from_millis(200), // startup timeout
-        true,                       // is_async
-        "async_sum".to_string(),    // function name to call
-    )
-    .await?;
+async fn main() -> Result<(), RuntimeError> {
+    // Create a pool with 10 JS workers, with the module loaded
+    let pool = Pool::builder()
+        .max_size(10) // number of workers in the pool
+        .with_evaluation_timeout(Duration::from_millis(200)) // module load timeout
+        .add_module("async_calculator", CODE_ASYNC_SUM.to_string())
+        .build()?;
 
     let params = vec![1, 2];
-    let result = pool
+    let result: u8 = pool
         .exec(
-            params, // input parameter
-            None,   // no stdout stream (set to Some(...) to capture stdout/stderr)
-            ExecOption {
-                timeout: Duration::from_millis(200), // timeout
-                allowed_hosts: None,
-            },
+            "async_calculator", // module name
+            "async_sum",        // function name
+            params,             // input parameters
+            ExecOptions::new().with_timeout(Duration::from_millis(200)),
         )
         .await?;
 
-    println!("async_sum(1, 2) == {}", result);
+    println!("async_sum(1, 2) == {result}");
     assert_eq!(result, 3);
     Ok(())
 }
