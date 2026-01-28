@@ -12,7 +12,7 @@ use tracing::{debug, warn};
 use crate::{
     orama_extension::{ChannelStorage, OutputChannel, SharedCache, StdoutHandler, StdoutHandlerFn},
     permission::CustomPermissions,
-    RecyclePolicy,
+    DomainPermission, RecyclePolicy,
 };
 
 use super::parameters::TryIntoFunctionParameters;
@@ -74,7 +74,7 @@ enum RuntimeEvent {
         function_name: String,
         input_params: String,
         stdout_sender: Option<Arc<tokio::sync::broadcast::Sender<(OutputChannel, String)>>>,
-        domain_permission: super::options::DomainPermission,
+        domain_permission: DomainPermission,
         sender: tokio::sync::oneshot::Sender<Result<serde_json::Value, RuntimeError>>,
     },
 }
@@ -104,7 +104,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
     Runtime<Input, Output>
 {
     pub async fn new(
-        domain_permission: super::options::DomainPermission,
+        domain_permission: DomainPermission,
         evaluation_timeout: Duration,
         shared_cache: SharedCache,
         recycle_policy: RecyclePolicy,
@@ -359,7 +359,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
         function_name: String,
         params: Input,
         stdout_sender: Option<Arc<tokio::sync::broadcast::Sender<(OutputChannel, String)>>>,
-        domain_permission: super::options::DomainPermission,
+        domain_permission: DomainPermission,
         timeout: Duration,
     ) -> Result<Output, RuntimeError> {
         if !self.is_alive() {
@@ -625,7 +625,7 @@ globalThis.{GLOBAL_VARIABLE_NAME} = isAsync ? await result : result;
 fn update_inner_state(
     js_runtime: &mut deno_core::JsRuntime,
     stdout_sender: Option<Arc<tokio::sync::broadcast::Sender<(OutputChannel, String)>>>,
-    domain_permission: super::options::DomainPermission,
+    domain_permission: DomainPermission,
 ) {
     let rc_state = js_runtime.op_state();
     let mut rc_state_ref = rc_state.borrow_mut();

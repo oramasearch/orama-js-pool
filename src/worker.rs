@@ -138,13 +138,18 @@ impl Worker {
         let params_tuple = params.try_into_function_parameter()?;
         let params_value = serde_json::to_value(params_tuple.0)?;
 
+        // Use exec_options domain_permission if specified, otherwise use worker default
+        let domain_permission = exec_options
+            .domain_permission
+            .unwrap_or_else(|| self.domain_permission.clone());
+
         let result: serde_json::Value = runtime
             .exec(
                 module_name,
                 function_name.to_string(),
                 params_value,
                 exec_options.stdout_sender,
-                exec_options.domain_permission,
+                domain_permission,
                 exec_options.timeout,
             )
             .await?;

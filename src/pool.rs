@@ -747,6 +747,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_domain_permission_worker_default() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let fetch_code = r#"
+            async function fetchData(url) {
+                const response = await fetch(url);
+                return await response.text();
+            }
+            export default { fetchData };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(1)
+            .add_module("fetcher", fetch_code.to_string())
+            .with_domain_permission(DomainPermission::AllowAll)
+            .build()
+            .unwrap();
+
+        let result: Result<String, RuntimeError> = pool
+            .exec(
+                "fetcher",
+                "fetchData",
+                "https://blocked-domain.test",
+                ExecOptions::new()
+                    .with_domain_permission(DomainPermission::DenyAll)
+                    .with_timeout(Duration::from_secs(2)),
+            )
+            .await;
+
+        // use exec deny list
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, RuntimeError::NetworkPermissionDenied(_)));
+
+        let result: Result<String, RuntimeError> = pool
+            .exec(
+                "fetcher",
+                "fetchData",
+                "http://allowed-domain.test",
+                // No specification of the domain permission, so it should use the worker one.
+                ExecOptions::new().with_timeout(Duration::from_secs(2)),
+            )
+            .await;
+
+        // it returns error because the domain is invalid (DNS lookup fails), not because it is blacklisted
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, RuntimeError::ErrorThrown(ref js_err) if
+                js_err.message.as_ref().is_some_and(|msg| msg.contains("failed to lookup address"))
+            ),
+            "Expected ErrorThrown with DNS/connection error message, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_exec_timeout() {
         let _ = tracing_subscriber::fmt::try_init();
 

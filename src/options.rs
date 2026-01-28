@@ -22,7 +22,7 @@ pub enum RecyclePolicy {
 #[derive(Debug, Clone)]
 pub struct ExecOptions {
     pub timeout: Duration,
-    pub domain_permission: DomainPermission,
+    pub domain_permission: Option<DomainPermission>,
     pub stdout_sender: Option<Arc<tokio::sync::broadcast::Sender<(OutputChannel, String)>>>,
 }
 
@@ -37,7 +37,7 @@ impl ExecOptions {
     }
 
     pub fn with_domain_permission(mut self, permission: DomainPermission) -> Self {
-        self.domain_permission = permission;
+        self.domain_permission = Some(permission);
         self
     }
 
@@ -54,7 +54,7 @@ impl Default for ExecOptions {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(30),
-            domain_permission: DomainPermission::DenyAll,
+            domain_permission: None,
             stdout_sender: None,
         }
     }
