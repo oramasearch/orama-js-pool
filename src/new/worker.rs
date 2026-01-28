@@ -4,10 +4,11 @@ use deno_core::ModuleCodeString;
 use serde::de::DeserializeOwned;
 use tracing::info;
 
-use crate::{orama_extension::SharedCache, parameters::TryIntoFunctionParameters};
+use crate::orama_extension::SharedCache;
 
 use super::{
     options::{ExecOptions, ModuleOptions},
+    parameters::TryIntoFunctionParameters,
     runtime::{Runtime, RuntimeError},
 };
 

@@ -4,11 +4,12 @@ use deno_core::ModuleCodeString;
 use serde::de::DeserializeOwned;
 use tracing::info;
 
-use crate::{orama_extension::SharedCache, parameters::TryIntoFunctionParameters};
+use crate::orama_extension::SharedCache;
 
 use super::{
     manager::{ModuleDefinition, WorkerManager},
     options::{ExecOptions, ModuleOptions},
+    parameters::TryIntoFunctionParameters,
     runtime::RuntimeError,
 };
 
@@ -168,12 +169,7 @@ mod tests {
             .unwrap();
 
         let result: i32 = pool
-            .exec(
-                "math",
-                "add",
-                vec![serde_json::json!(5), serde_json::json!(3)],
-                ExecOptions::new(),
-            )
+            .exec("math", "add", (5, 3), ExecOptions::new())
             .await
             .unwrap_or_else(|e| panic!("Execution failed: {e:?}"));
 

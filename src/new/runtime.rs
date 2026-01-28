@@ -11,10 +11,11 @@ use tracing::{debug, info, warn};
 
 use crate::{
     orama_extension::{ChannelStorage, OutputChannel, SharedCache, StdoutHandler, StdoutHandlerFn},
-    parameters::TryIntoFunctionParameters,
     permission::CustomPermissions,
     runner::JSRunnerError,
 };
+
+use super::parameters::TryIntoFunctionParameters;
 
 deno_core::extension!(deno_telemetry, esm = ["telemetry.ts", "util.ts"],);
 
