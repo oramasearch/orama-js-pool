@@ -7,7 +7,7 @@ use deno_web::BlobStore;
 use serde::de::DeserializeOwned;
 use thiserror::Error;
 use tokio::{runtime::Builder, task::LocalSet};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::{
     orama_extension::{ChannelStorage, OutputChannel, SharedCache, StdoutHandler, StdoutHandlerFn},
@@ -160,13 +160,10 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                     .send(Ok(handler))
                     .expect("Cannot send thread_safe_handle init 1");
 
-                info!("Runtime initialized, ready to load modules");
-
                 init_sender2
                     .send(Ok(()))
                     .expect("Cannot send runtime ready signal");
 
-                info!("Waiting for runtime events...");
                 while let Some(ev) = receiver.recv().await {
                     debug!("Received event...");
                     match ev {
@@ -219,13 +216,9 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                         }
                     };
                 }
-
-                info!("Runtime task stopped")
             });
 
             rt.block_on(local);
-
-            info!("Runtime thread stopped")
         });
 
         let handler = init_receiver1.await.unwrap();
@@ -267,18 +260,15 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                     _ => Err(RuntimeError::InitializationError(Box::new(e))),
                 }
             }
-            Ok(Ok(Ok(_))) => {
-                info!("Runtime created successfully");
-                Ok(Self {
-                    handler,
-                    join_handler: thread_id,
-                    sender,
-                    exec_count: 0,
-                    timed_out: false,
-                    loaded_modules: HashMap::new(),
-                    _p: PhantomData,
-                })
-            }
+            Ok(Ok(Ok(_))) => Ok(Self {
+                handler,
+                join_handler: thread_id,
+                sender,
+                exec_count: 0,
+                timed_out: false,
+                loaded_modules: HashMap::new(),
+                _p: PhantomData,
+            }),
         }
     }
 
@@ -387,7 +377,6 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
         let (sender, receiver) =
             tokio::sync::oneshot::channel::<Result<serde_json::Value, RuntimeError>>();
 
-        info!("Ask to exec");
         self.sender
             .send(RuntimeEvent::ExecFunction {
                 id,
@@ -416,8 +405,6 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
             Ok(Ok(Err(e))) => return Err(e),
         };
 
-        info!("Executed");
-
         let output: Output = serde_json::from_value(output).map_err(RuntimeError::SerdeError)?;
 
         Ok(output)
@@ -437,8 +424,6 @@ async fn load_module(
     let specifier = format!("file:/{module_name}");
     let specifier = ModuleSpecifier::parse(&specifier).unwrap();
 
-    info!("Loading module: {}", module_name);
-
     let mod_id = js_runtime
         .load_side_es_module_from_code(&specifier, code)
         .await
@@ -453,8 +438,6 @@ async fn load_module(
             _ => RuntimeError::InitializationError(Box::new(e)),
         })?;
 
-    info!("Evaluating module: {}", module_name);
-
     let eval = js_runtime.mod_evaluate(mod_id);
 
     js_runtime
@@ -465,7 +448,6 @@ async fn load_module(
     eval.await
         .map_err(|e| RuntimeError::InitializationError(Box::new(e)))?;
 
-    info!("Module loaded successfully: {}", module_name);
     Ok(())
 }
 
@@ -570,8 +552,6 @@ globalThis.{GLOBAL_VARIABLE_NAME} = isAsync ? await result : result;
         "#,
     );
 
-    info!("Running code");
-
     let mod_id = match js_runtime
         .load_side_es_module_from_code(&exec_specifier, code)
         .await
@@ -611,8 +591,6 @@ globalThis.{GLOBAL_VARIABLE_NAME} = isAsync ? await result : result;
             panic!("eval Err {e:?}");
         }
     };
-
-    info!("Done");
 
     let mut scope: deno_core::v8::HandleScope<'_> = js_runtime.handle_scope();
     let context = scope.get_current_context();

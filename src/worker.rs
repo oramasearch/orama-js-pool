@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use deno_core::ModuleCodeString;
 use serde::de::DeserializeOwned;
-use tracing::info;
+use tracing::warn;
 
 use crate::orama_extension::SharedCache;
 
@@ -57,11 +57,7 @@ impl Worker {
         Code: Into<ModuleCodeString> + Send + 'static,
     {
         let code_string: ModuleCodeString = code.into();
-        let specifier = format!("file:/{name}");
 
-        info!("Adding module: {} with specifier {}", name, specifier);
-
-        // Store module info
         self.modules.insert(
             name.clone(),
             ModuleInfo {
@@ -69,9 +65,7 @@ impl Worker {
             },
         );
 
-        // Create runtime if it doesn't exist
         if self.runtime.is_none() {
-            info!("Creating new runtime");
             let runtime = Runtime::<serde_json::Value, serde_json::Value>::new(
                 self.domain_permission.clone(),
                 self.evaluation_timeout,
@@ -81,7 +75,6 @@ impl Worker {
             self.runtime = Some(runtime);
         }
 
-        // Load this module into the runtime
         if let Some(runtime) = &mut self.runtime {
             runtime.load_module(name.clone(), code_string).await?;
         }
@@ -91,9 +84,6 @@ impl Worker {
 
     /// Rebuild the runtime with all currently registered modules
     async fn rebuild_runtime(&mut self) -> Result<(), RuntimeError> {
-        info!("Rebuilding runtime with {} modules", self.modules.len());
-
-        // Create a new runtime
         let mut runtime = Runtime::<serde_json::Value, serde_json::Value>::new(
             self.domain_permission.clone(),
             self.evaluation_timeout,
@@ -101,7 +91,6 @@ impl Worker {
         )
         .await?;
 
-        // Load all modules into the new runtime
         for (name, info) in &self.modules {
             runtime.load_module(name.clone(), info.code.clone()).await?;
         }
@@ -132,7 +121,7 @@ impl Worker {
         let runtime = match &mut self.runtime {
             Some(rt) if rt.is_alive() => rt,
             _ => {
-                info!("Runtime not alive or missing, rebuilding...");
+                warn!("Runtime not alive or missing, rebuilding...");
                 self.rebuild_runtime().await?;
                 self.runtime.as_mut().unwrap()
             }

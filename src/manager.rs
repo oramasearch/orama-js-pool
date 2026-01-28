@@ -9,8 +9,6 @@ use std::{
 use deadpool::managed::{Manager, Metrics, RecycleError, RecycleResult};
 use std::future::Future;
 
-use tracing::info;
-
 use crate::orama_extension::SharedCache;
 
 use super::{
@@ -55,10 +53,6 @@ impl WorkerManager {
 
         // Increment version to invalidate existing workers
         self.version.fetch_add(1, Ordering::Release);
-        info!(
-            "Modules updated, version incremented to {}",
-            self.version.load(Ordering::Acquire)
-        );
     }
 
     /// Get current module version
@@ -89,8 +83,6 @@ impl Manager for WorkerManager {
         let worker_options = self.worker_options.clone();
 
         async move {
-            info!("Creating new worker");
-
             let mut builder = WorkerBuilder::new()
                 .with_cache(cache)
                 .with_version(version)
@@ -103,7 +95,6 @@ impl Manager for WorkerManager {
 
             let worker = builder.build().await?;
 
-            info!("Worker created successfully with version {}", version);
             Ok(worker)
         }
     }
@@ -118,22 +109,14 @@ impl Manager for WorkerManager {
         let worker_version = worker.version();
 
         async move {
-            // Check version mismatch
             if worker_version != current_version {
-                info!(
-                    "Worker version mismatch: worker={}, current={}. Will recreate.",
-                    worker_version, current_version
-                );
                 return Err(RecycleError::Message("Module version mismatch".into()));
             }
 
-            // Check if worker is alive
             if !worker.is_alive() {
-                info!("Worker not alive. Will recreate.");
                 return Err(RecycleError::Message("Worker not alive".into()));
             }
 
-            // Worker is healthy and up-to-date
             Ok(())
         }
     }

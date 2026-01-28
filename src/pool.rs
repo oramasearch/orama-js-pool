@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use deno_core::ModuleCodeString;
 use serde::de::DeserializeOwned;
-use tracing::info;
 
 use crate::orama_extension::SharedCache;
 
@@ -56,8 +55,6 @@ impl Pool {
         let name = name.into();
         let code: ModuleCodeString = code.into();
 
-        info!("Adding/updating module: {}", name);
-
         let mut modules = self.manager.modules();
 
         modules.insert(
@@ -69,7 +66,6 @@ impl Pool {
 
         self.manager.update_modules(modules);
 
-        info!("Module {} added/updated successfully", name);
         Ok(())
     }
 }
