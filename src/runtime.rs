@@ -58,7 +58,7 @@ pub enum RuntimeError {
 enum RuntimeEvent {
     Stop,
     LoadModule {
-        module_name: String,
+        specifier: String,
         code: String,
         sender: tokio::sync::oneshot::Sender<Result<(), RuntimeError>>,
     },
@@ -172,11 +172,11 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                             break;
                         }
                         RuntimeEvent::LoadModule {
-                            module_name,
+                            specifier,
                             code,
                             sender,
                         } => {
-                            let result = load_module(&mut js_runtime, &module_name, code).await;
+                            let result = load_module(&mut js_runtime, &specifier, code).await;
                             let _ = sender.send(result);
                         }
                         RuntimeEvent::CheckFunction {
@@ -283,14 +283,14 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
         }
 
         let code: ModuleCodeString = code.into();
-        let code_string = code.as_str().to_string();
+        let code_string = code.to_string();
         let specifier = format!("file:/{module_name}");
 
         let (sender, receiver) = tokio::sync::oneshot::channel();
 
         self.sender
             .send(RuntimeEvent::LoadModule {
-                module_name: module_name.clone(),
+                specifier: specifier.clone(),
                 code: code_string,
                 sender,
             })
@@ -299,7 +299,6 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
 
         receiver.await.unwrap()?;
 
-        // Track the loaded module
         self.loaded_modules.insert(module_name, specifier);
 
         Ok(())
@@ -418,11 +417,10 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
 
 async fn load_module(
     js_runtime: &mut deno_core::JsRuntime,
-    module_name: &str,
+    specifier: &str,
     code: String,
 ) -> Result<(), RuntimeError> {
-    let specifier = format!("file:/{module_name}");
-    let specifier = ModuleSpecifier::parse(&specifier).unwrap();
+    let specifier = ModuleSpecifier::parse(specifier).unwrap();
 
     let mod_id = js_runtime
         .load_side_es_module_from_code(&specifier, code)
@@ -522,16 +520,13 @@ async fn execute_function(
     function_name: &str,
     input_params: &str,
 ) -> Result<serde_json::Value, RuntimeError> {
+    // Unique specifier prevents Deno's module cache from reusing previous execution results
     let exec_specifier = ModuleSpecifier::parse(&format!("file:/exec_{id}")).unwrap();
 
     // Conditionally await the function result to avoid overhead for sync functions.
     // We check if the result is async using two conditions:
     // 1. instanceof Promise - catches native Promises from async functions
     // 2. thenable check (has a .then method) - catches custom Promise-like objects
-    // This comprehensive check handles:
-    // - Native Promises from async functions
-    // - Thenable objects (custom Promise-like objects with .then())
-    // - Promises from transpiled/bundled code that may use different Promise implementations
     // For synchronous functions, we avoid the microtask scheduling overhead of await.
     let code = format!(
         r#"

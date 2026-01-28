@@ -112,7 +112,6 @@ impl Worker {
         Input: TryIntoFunctionParameters + Send + 'static,
         Output: DeserializeOwned + Send + 'static,
     {
-        // Check if module exists
         if !self.modules.contains_key(module_name) {
             return Err(RuntimeError::MissingModule(module_name.to_string()));
         }
@@ -127,7 +126,6 @@ impl Worker {
             }
         };
 
-        // Check if the function exists in the module
         runtime
             .check_function(module_name, function_name.to_string())
             .await?;
@@ -146,7 +144,6 @@ impl Worker {
             )
             .await?;
 
-        // Convert output from serde_json::Value
         let output: Output = serde_json::from_value(result)?;
         Ok(output)
     }

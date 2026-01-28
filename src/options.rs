@@ -6,37 +6,6 @@ use crate::OutputChannel;
 pub use crate::permission::DomainPermission;
 
 #[derive(Debug, Clone)]
-pub struct ModuleOptions {
-    pub timeout: Duration,
-    pub domain_permission: DomainPermission,
-}
-
-impl ModuleOptions {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
-    }
-
-    pub fn with_domain_permission(mut self, permission: DomainPermission) -> Self {
-        self.domain_permission = permission;
-        self
-    }
-}
-
-impl Default for ModuleOptions {
-    fn default() -> Self {
-        Self {
-            timeout: Duration::from_secs(30),
-            domain_permission: DomainPermission::DenyAll,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct ExecOptions {
     pub timeout: Duration,
     pub domain_permission: DomainPermission,
