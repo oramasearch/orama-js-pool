@@ -233,6 +233,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_pool_missing_function() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let add_code = r#"
+            function add(a, b) { return a + b; }
+            export default { add };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(2)
+            .add_module("add", add_code.to_string(), ModuleOptions::default())
+            .build()
+            .unwrap();
+
+        let result_module: Result<i32, RuntimeError> = pool
+            .exec(
+                "missingModule",
+                "add",
+                vec![serde_json::json!(5), serde_json::json!(3)],
+                ExecOptions::new(),
+            )
+            .await;
+
+        let result_function: Result<i32, RuntimeError> = pool
+            .exec(
+                "add",
+                "missingFunction",
+                vec![serde_json::json!(5), serde_json::json!(3)],
+                ExecOptions::new(),
+            )
+            .await;
+
+        assert!(result_module.is_err());
+        assert!(matches!(
+            result_module.unwrap_err(),
+            RuntimeError::NoExportedFunction(name) if name == "missingModule"
+        ));
+
+        assert!(result_function.is_err());
+        assert!(matches!(
+            result_function.unwrap_err(),
+            RuntimeError::NoExportedFunction(name) if name == "missingFunction"
+        ));
+    }
+
+    #[tokio::test]
     async fn test_pool_dynamic_module_addition() {
         let _ = tracing_subscriber::fmt::try_init();
 
