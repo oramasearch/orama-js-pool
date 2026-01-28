@@ -16,7 +16,7 @@ use crate::{
 
 use super::parameters::TryIntoFunctionParameters;
 
-deno_core::extension!(deno_telemetry, esm = ["telemetry.ts", "util.ts"],);
+deno_core::extension!(deno_telemetry, esm = ["telemetry.ts", "util.ts"]);
 
 pub static RUNTIME_SNAPSHOT: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/RUNJS_SNAPSHOT.bin"));
@@ -43,14 +43,16 @@ pub enum RuntimeError {
     ExportIsNotAFunction(String),
     #[error("The script took too long to execute")]
     ExecTimeout,
+    #[error("Network permission denied: {0}")]
+    NetworkPermissionDenied(String),
     #[error("Serde error: {0}")]
     SerdeError(#[from] serde_json::Error),
     #[error("Compilation error: {0}")]
     CompilationError(Box<deno_core::error::JsError>),
     // #[error("Parameter error: {0}")]
     // ParameterError(#[from] JSRunnerError),
-    #[error("unknown")]
-    Unknown,
+    #[error("Unknown error: {0}")]
+    Unknown(String),
 }
 
 enum RuntimeEvent {
@@ -212,13 +214,8 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                             )
                             .await;
 
-                            let is_err = result.is_err();
+                            // We do not close the runtime on error, it does not provide any advantage
                             let _ = sender.send(result);
-
-                            if is_err {
-                                // Stop runtime on execution error
-                                return;
-                            }
                         }
                     };
                 }
@@ -347,7 +344,9 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
             .await
             .unwrap();
 
-        let output = receiver.await.unwrap();
+        let output = receiver
+            .await
+            .map_err(|e| RuntimeError::Unknown(e.to_string()))?;
 
         match output {
             0 => Ok(()),
@@ -590,7 +589,17 @@ globalThis.{GLOBAL_VARIABLE_NAME} = isAsync ? await result : result;
         Ok(_) => {}
         Err(e) => {
             return match e {
-                CoreError::Js(e) => Err(RuntimeError::ErrorThrown(Box::new(e))),
+                CoreError::Js(e) => {
+                    // Check if this is a network permission error
+                    if let Some(msg) = &e.message {
+                        if msg
+                            .contains(crate::permission::DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING)
+                        {
+                            return Err(RuntimeError::NetworkPermissionDenied(msg.clone()));
+                        }
+                    }
+                    Err(RuntimeError::ErrorThrown(Box::new(e)))
+                }
                 _ => Err(RuntimeError::UnknownExecutionError(Box::new(e))),
             };
         }

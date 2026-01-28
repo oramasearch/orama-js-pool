@@ -8,7 +8,7 @@ mod orama_extension;
 #[path = "src/permission.rs"]
 mod permission;
 
-deno_core::extension!(deno_telemetry, esm = ["telemetry.ts", "util.ts"],);
+deno_core::extension!(deno_telemetry, esm = ["telemetry.ts", "util.ts"]);
 
 fn main() {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());

@@ -222,12 +222,6 @@ impl WorkerBuilder {
         self
     }
 
-    /// Set the allowed hosts for all modules
-    pub fn with_allowed_hosts(mut self, hosts: Vec<String>) -> Self {
-        self.domain_permission = Some(DomainPermission::Allow(hosts));
-        self
-    }
-
     /// Set the domain permission for all modules
     pub fn with_domain_permission(mut self, permission: DomainPermission) -> Self {
         self.domain_permission = Some(permission);

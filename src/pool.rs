@@ -36,10 +36,11 @@ impl Pool {
         Input: TryIntoFunctionParameters + Send + 'static,
         Output: DeserializeOwned + Send + 'static,
     {
-        let mut worker = self.inner.get().await.map_err(|e| {
-            eprintln!("Pool get error: {e:?}");
-            RuntimeError::Unknown
-        })?;
+        let mut worker = self
+            .inner
+            .get()
+            .await
+            .map_err(|e| RuntimeError::Unknown(e.to_string()))?;
 
         worker
             .exec(module_name, function_name, params, exec_options)
@@ -98,12 +99,6 @@ impl PoolBuilder {
         self
     }
 
-    /// Set the allowed hosts for all workers and modules
-    pub fn with_allowed_hosts(mut self, hosts: Vec<String>) -> Self {
-        self.domain_permission = Some(DomainPermission::Allow(hosts));
-        self
-    }
-
     /// Set the evaluation timeout for module loading in all workers
     pub fn with_evaluation_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.evaluation_timeout = Some(timeout);
@@ -147,10 +142,7 @@ impl PoolBuilder {
         let pool = deadpool::managed::Pool::builder(manager.clone())
             .max_size(self.max_size)
             .build()
-            .map_err(|e| {
-                eprintln!("Failed to build pool: {e:?}");
-                RuntimeError::Unknown
-            })?;
+            .map_err(|e| RuntimeError::Unknown(e.to_string()))?;
 
         Ok(Pool {
             inner: pool,
@@ -548,5 +540,202 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result3, 300, "Second update should return newest value");
+    }
+
+    #[tokio::test]
+    async fn test_domain_permission_deny_all() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let fetch_code = r#"
+            async function fetchData(url) {
+                const response = await fetch(url);
+                return await response.text();
+            }
+            export default { fetchData };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(2)
+            .add_module("fetcher", fetch_code.to_string())
+            .build()
+            .unwrap();
+
+        let result: Result<String, RuntimeError> = pool
+            .exec(
+                "fetcher",
+                "fetchData",
+                "https://fake-domain-for-test.local",
+                ExecOptions::new().with_domain_permission(DomainPermission::DenyAll),
+            )
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, RuntimeError::NetworkPermissionDenied(ref msg) if msg.contains("Domain not allowed: https://fake-domain-for-test.local")),
+            "Expected NetworkPermissionDenied, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_domain_permission_allow_specific() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let fetch_code = r#"
+            async function fetchData(url) {
+                const response = await fetch(url);
+                return await response.text();
+            }
+            export default { fetchData };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(2)
+            .add_module("fetcher", fetch_code.to_string())
+            .build()
+            .unwrap();
+
+        let allowed_hosts = DomainPermission::Allow(vec!["allowed-domain.test".to_string()]);
+
+        let result: Result<String, RuntimeError> = pool
+            .exec(
+                "fetcher",
+                "fetchData",
+                "https://blocked-domain.test",
+                ExecOptions::new()
+                    .with_domain_permission(allowed_hosts.clone())
+                    .with_timeout(Duration::from_secs(2)),
+            )
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, RuntimeError::NetworkPermissionDenied(ref msg) if msg.contains("Allowed domains")),
+            "Expected NetworkPermissionDenied with 'Allowed domains' message, got: {err:?}"
+        );
+
+        let result: Result<String, RuntimeError> = pool
+            .exec(
+                "fetcher",
+                "fetchData",
+                "http://allowed-domain.test",
+                ExecOptions::new()
+                    .with_domain_permission(allowed_hosts)
+                    .with_timeout(Duration::from_secs(2)),
+            )
+            .await;
+
+        // it returns error because the domain is invalid (DNS lookup fails), not because it is blacklisted
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, RuntimeError::ErrorThrown(ref js_err) if
+                js_err.message.as_ref().is_some_and(|msg| msg.contains("failed to lookup address"))
+            ),
+            "Expected ErrorThrown with DNS/connection error message, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_domain_permission_allow_all() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let fetch_code = r#"
+            async function testAllowAll(url) {
+                const response = await fetch(url);
+                return await response.text();
+            }
+            export default { testAllowAll };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(2)
+            .add_module("fetcher", fetch_code.to_string())
+            .build()
+            .unwrap();
+
+        let result: Result<String, RuntimeError> = pool
+            .exec(
+                "fetcher",
+                "testAllowAll",
+                "https://any-domain.test",
+                ExecOptions::new()
+                    .with_domain_permission(DomainPermission::AllowAll)
+                    .with_timeout(Duration::from_secs(2)),
+            )
+            .await;
+
+        // it returns error because the domain is invalid (DNS lookup fails), not because it is blacklisted
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, RuntimeError::ErrorThrown(ref js_err) if
+                js_err.message.as_ref().is_some_and(|msg| msg.contains("failed to lookup address"))
+            ),
+            "Expected ErrorThrown with DNS/connection error message, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_domain_permission_deny_specific() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let fetch_code = r#"
+            async function fetchData(url) {
+                const response = await fetch(url);
+                return await response.text();
+            }
+            export default { fetchData };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(2)
+            .add_module("fetcher", fetch_code.to_string())
+            .build()
+            .unwrap();
+
+        // Deny specific domain
+        let deny_list = DomainPermission::Deny(vec!["blocked-domain.test".to_string()]);
+
+        // This should fail because blocked-domain.test is in the deny list
+        let result: Result<String, RuntimeError> = pool
+            .exec(
+                "fetcher",
+                "fetchData",
+                "https://blocked-domain.test",
+                ExecOptions::new()
+                    .with_domain_permission(deny_list.clone())
+                    .with_timeout(Duration::from_secs(2)),
+            )
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, RuntimeError::NetworkPermissionDenied(ref msg) if msg.contains("deny list")),
+            "Expected NetworkPermissionDenied with 'deny list' message, got: {err:?}"
+        );
+
+        let result: Result<String, RuntimeError> = pool
+            .exec(
+                "fetcher",
+                "fetchData",
+                "http://allowed-domain.test",
+                ExecOptions::new()
+                    .with_domain_permission(deny_list)
+                    .with_timeout(Duration::from_secs(2)),
+            )
+            .await;
+
+        // it returns error because the domain is invalid (DNS lookup fails), not because it is blacklisted
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, RuntimeError::ErrorThrown(ref js_err) if
+                js_err.message.as_ref().is_some_and(|msg| msg.contains("failed to lookup address"))
+            ),
+            "Expected ErrorThrown with DNS/connection error message, got: {err:?}"
+        );
     }
 }
