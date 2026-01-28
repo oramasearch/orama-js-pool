@@ -8,14 +8,11 @@ pub const DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING: &str = "Domain not allowed
 
 /// Domain permission policy for network access
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum DomainPermission {
-    /// Deny all network access
     DenyAll,
-    /// Allow all network access
     AllowAll,
-    /// Allow only specific domains
     Allow(Vec<String>),
-    /// Deny only specific domains (allow all others)
     Deny(Vec<String>),
 }
 

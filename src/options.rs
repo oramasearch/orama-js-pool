@@ -108,10 +108,3 @@ impl Default for WorkerOptions {
         }
     }
 }
-
-/// Resolved execution options after merging module and runtime options
-#[derive(Debug, Clone)]
-pub struct ResolvedExecOptions {
-    pub timeout: Duration,
-    pub allowed_hosts: Option<Vec<String>>,
-}

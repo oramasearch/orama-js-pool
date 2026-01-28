@@ -1,237 +1,552 @@
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
+use std::collections::HashMap;
+use std::time::Duration;
 
 use deno_core::ModuleCodeString;
-use tokio::sync::RwLock;
+use serde::de::DeserializeOwned;
+use tracing::info;
 
-use crate::orama_extension::{OutputChannel, SharedCache};
-use crate::runner::ExecOption;
-use crate::{executor::JSExecutor, JSRunnerError, TryIntoFunctionParameters};
+use crate::orama_extension::SharedCache;
 
-pub struct JSPoolExecutor<Input, Output> {
-    executors: Arc<Vec<RwLock<JSExecutor<Input, Output>>>>,
-    index: AtomicUsize,
+use super::{
+    manager::{ModuleDefinition, WorkerManager},
+    options::{DomainPermission, ExecOptions, WorkerOptions},
+    parameters::TryIntoFunctionParameters,
+    runtime::RuntimeError,
+};
+
+pub struct Pool {
+    inner: deadpool::managed::Pool<WorkerManager>,
+    manager: WorkerManager,
 }
 
-pub struct JSPoolExecutorConfig {
-    pub instances: usize,
-    pub queue_capacity: usize,
-    pub allowed_hosts_on_init: Option<Vec<String>>,
-    pub timeout_on_init: std::time::Duration,
-    pub is_async: bool,
-    pub function_name: String,
-}
+impl Pool {
+    pub fn builder() -> PoolBuilder {
+        PoolBuilder::new()
+    }
 
-impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'static>
-    JSPoolExecutor<Input, Output>
-{
-    #[allow(clippy::too_many_arguments)]
-    pub async fn new<Code: Into<ModuleCodeString> + Send + Clone + 'static>(
+    // Execute a function in a module
+    pub async fn exec<Input, Output>(
+        &self,
+        module_name: &str,
+        function_name: &str,
+        params: Input,
+        exec_options: ExecOptions,
+    ) -> Result<Output, RuntimeError>
+    where
+        Input: TryIntoFunctionParameters + Send + 'static,
+        Output: DeserializeOwned + Send + 'static,
+    {
+        let mut worker = self.inner.get().await.map_err(|e| {
+            eprintln!("Pool get error: {e:?}");
+            RuntimeError::Unknown
+        })?;
+
+        worker
+            .exec(module_name, function_name, params, exec_options)
+            .await
+    }
+
+    /// Add or update a module in the pool
+    pub async fn add_module<Code: Into<ModuleCodeString>>(
+        &self,
+        name: impl Into<String>,
         code: Code,
-        instances: usize,
-        allowed_hosts_on_init: Option<Vec<String>>,
-        timeout_on_init: std::time::Duration,
-        is_async: bool,
-        function_name: String,
-    ) -> Result<Self, JSRunnerError> {
-        let shared_cache = SharedCache::new();
+    ) -> Result<(), RuntimeError> {
+        let name = name.into();
+        let code: ModuleCodeString = code.into();
 
-        let mut executors = Vec::with_capacity(instances);
-        for _ in 0..(instances) {
-            let executor = JSExecutor::try_new(
-                code.clone(),
-                allowed_hosts_on_init.clone(),
-                timeout_on_init,
-                is_async,
-                function_name.clone(),
-                shared_cache.clone(),
-            )
-            .await?;
-            let executor = RwLock::new(executor);
-            executors.push(executor);
+        info!("Adding/updating module: {}", name);
+
+        let mut modules = self.manager.modules();
+
+        modules.insert(
+            name.clone(),
+            ModuleDefinition {
+                code: code.as_str().into(),
+            },
+        );
+
+        self.manager.update_modules(modules);
+
+        info!("Module {} added/updated successfully", name);
+        Ok(())
+    }
+}
+
+/// Builder for creating a Pool
+pub struct PoolBuilder {
+    modules: HashMap<String, ModuleDefinition>,
+    max_size: usize,
+    domain_permission: Option<DomainPermission>,
+    evaluation_timeout: Option<std::time::Duration>,
+}
+
+impl PoolBuilder {
+    /// Create a new PoolBuilder
+    pub fn new() -> Self {
+        Self {
+            modules: HashMap::new(),
+            max_size: 10,
+            domain_permission: None,
+            evaluation_timeout: None,
         }
+    }
 
-        let executors = Arc::new(executors);
+    /// Set the maximum number of workers in the pool
+    pub fn max_size(mut self, max_size: usize) -> Self {
+        self.max_size = max_size;
+        self
+    }
 
-        Ok(Self {
-            executors,
-            index: AtomicUsize::new(0),
+    /// Set the allowed hosts for all workers and modules
+    pub fn with_allowed_hosts(mut self, hosts: Vec<String>) -> Self {
+        self.domain_permission = Some(DomainPermission::Allow(hosts));
+        self
+    }
+
+    /// Set the evaluation timeout for module loading in all workers
+    pub fn with_evaluation_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.evaluation_timeout = Some(timeout);
+        self
+    }
+
+    /// Set domain permission for all workers and modules
+    pub fn with_domain_permission(mut self, permission: DomainPermission) -> Self {
+        self.domain_permission = Some(permission);
+        self
+    }
+
+    /// Add a module to be loaded in all workers
+    pub fn add_module<Code: Into<ModuleCodeString>>(
+        mut self,
+        name: impl Into<String>,
+        code: Code,
+    ) -> Self {
+        let code: ModuleCodeString = code.into();
+        self.modules.insert(
+            name.into(),
+            ModuleDefinition {
+                code: code.as_str().into(),
+            },
+        );
+        self
+    }
+
+    /// Build the pool
+    pub fn build(self) -> Result<Pool, RuntimeError> {
+        let cache = SharedCache::new();
+
+        // Construct WorkerOptions from individual fields
+        let worker_options = WorkerOptions {
+            evaluation_timeout: self.evaluation_timeout.unwrap_or(Duration::from_secs(5)),
+            domain_permission: self.domain_permission.unwrap_or(DomainPermission::DenyAll),
+        };
+
+        let manager = WorkerManager::new(self.modules, cache, worker_options);
+
+        let pool = deadpool::managed::Pool::builder(manager.clone())
+            .max_size(self.max_size)
+            .build()
+            .map_err(|e| {
+                eprintln!("Failed to build pool: {e:?}");
+                RuntimeError::Unknown
+            })?;
+
+        Ok(Pool {
+            inner: pool,
+            manager,
         })
     }
-
-    /// Create a builder for JSPoolExecutor
-    pub fn builder<Code>(
-        code: Code,
-        function_name: impl Into<String>,
-    ) -> JSPoolExecutorBuilder<Input, Output, Code>
-    where
-        Code: Into<ModuleCodeString> + Send + Clone + 'static,
-    {
-        JSPoolExecutorBuilder::new(code, function_name)
-    }
-
-    pub async fn exec(
-        &self,
-        params: Input,
-        stdout_sender: Option<Arc<tokio::sync::broadcast::Sender<(OutputChannel, String)>>>,
-        option: ExecOption,
-    ) -> Result<Output, JSRunnerError> {
-        let index = self.index.fetch_add(1, Ordering::AcqRel);
-        let executor = &self.executors[index % self.executors.len()];
-        let mut executor_lock = executor.write().await;
-        executor_lock.exec(params, stdout_sender, option).await
-    }
 }
 
-/// Builder for JSPoolExecutor
-pub struct JSPoolExecutorBuilder<Input, Output, Code> {
-    code: Code,
-    function_name: String,
-    instances: usize,
-    allowed_hosts_on_init: Option<Vec<String>>,
-    timeout_on_init: std::time::Duration,
-    is_async: bool,
-    _phantom: std::marker::PhantomData<(Input, Output)>,
-}
-
-impl<Input: TryIntoFunctionParameters, Output: serde::de::DeserializeOwned + 'static, Code>
-    JSPoolExecutorBuilder<Input, Output, Code>
-where
-    Code: Into<ModuleCodeString> + Send + Clone + 'static,
-{
-    pub fn new(code: Code, function_name: impl Into<String>) -> Self {
-        Self {
-            code,
-            function_name: function_name.into(),
-            instances: 1,
-            allowed_hosts_on_init: Some(vec![]), // Default: no network access
-            timeout_on_init: std::time::Duration::from_secs(30),
-            is_async: false,
-            _phantom: std::marker::PhantomData,
-        }
-    }
-
-    pub fn instances(mut self, instances: usize) -> Self {
-        self.instances = instances;
-        self
-    }
-
-    pub fn allowed_hosts(mut self, hosts: Vec<String>) -> Self {
-        self.allowed_hosts_on_init = Some(hosts);
-        self
-    }
-
-    pub fn timeout(mut self, timeout: std::time::Duration) -> Self {
-        self.timeout_on_init = timeout;
-        self
-    }
-
-    #[allow(clippy::wrong_self_convention)]
-    pub fn is_async(mut self, is_async: bool) -> Self {
-        self.is_async = is_async;
-        self
-    }
-
-    pub async fn build(self) -> Result<JSPoolExecutor<Input, Output>, JSRunnerError> {
-        JSPoolExecutor::new(
-            self.code,
-            self.instances,
-            self.allowed_hosts_on_init,
-            self.timeout_on_init,
-            self.is_async,
-            self.function_name,
-        )
-        .await
+impl Default for PoolBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use serde::{Deserialize, Serialize};
-
     use super::*;
-    use std::time::Duration;
-
-    #[derive(Clone, Serialize, Deserialize)]
-    struct TestInput(i32);
 
     #[tokio::test]
-    async fn test_jspool_executor_basic() {
-        // JS code: function addOne(x) { return x + 1; }
+    async fn test_pool_basic() {
+        let _ = tracing_subscriber::fmt::try_init();
+
         let js_code = r#"
-            function addOne(x) { return x + 1; }
-            export default { addOne };
-        "#
-        .to_string();
+            function add(a, b) {
+                return a + b;
+            }
+            export default { add };
+        "#;
 
-        let pool = JSPoolExecutor::<TestInput, i32>::new(
-            js_code,
-            2, // two executors
-            None,
-            Duration::from_secs(2),
-            false,
-            "addOne".to_string(),
-        )
-        .await
-        .expect("Failed to create JSPoolExecutor");
+        let pool = Pool::builder()
+            .max_size(2)
+            .add_module("math", js_code.to_string())
+            .build()
+            .unwrap();
 
-        let result = pool
-            .exec(
-                TestInput(41),
-                None,
-                ExecOption {
-                    timeout: Duration::from_secs(2),
-                    allowed_hosts: None,
-                },
-            )
+        let result: i32 = pool
+            .exec("math", "add", (5, 3), ExecOptions::new())
             .await
-            .expect("Execution failed");
+            .unwrap_or_else(|e| panic!("Execution failed: {e:?}"));
 
-        assert_eq!(result, 42);
+        assert_eq!(result, 8);
     }
 
     #[tokio::test]
-    async fn test_cache() {
-        let js_code = r#"
-            function test_all() {
-                const cached = this.orama.cache.get("counter");
-                const count = cached ? cached + 1 : 1;
-                this.orama.cache.set("counter", count);
-                
-                return `count: ${count}`;
+    async fn test_pool_multiple_modules() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let add_code = r#"
+            function add(a, b) { return a + b; }
+            export default { add };
+        "#;
+
+        let multiply_code = r#"
+            function multiply(a, b) { return a * b; }
+            export default { multiply };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(2)
+            .add_module("add", add_code.to_string())
+            .add_module("multiply", multiply_code.to_string())
+            .build()
+            .unwrap();
+
+        let result1: i32 = pool
+            .exec(
+                "add",
+                "add",
+                vec![serde_json::json!(5), serde_json::json!(3)],
+                ExecOptions::new(),
+            )
+            .await
+            .unwrap();
+
+        let result2: i32 = pool
+            .exec(
+                "multiply",
+                "multiply",
+                vec![serde_json::json!(5), serde_json::json!(3)],
+                ExecOptions::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result1, 8);
+        assert_eq!(result2, 15);
+    }
+
+    #[tokio::test]
+    async fn test_pool_missing_function() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let add_code = r#"
+            function add(a, b) { return a + b; }
+            export default { add };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(2)
+            .add_module("add", add_code.to_string())
+            .build()
+            .unwrap();
+
+        let result_module: Result<i32, RuntimeError> = pool
+            .exec(
+                "missingModuleTest",
+                "add",
+                vec![serde_json::json!(5), serde_json::json!(3)],
+                ExecOptions::new(),
+            )
+            .await;
+
+        let result_function: Result<i32, RuntimeError> = pool
+            .exec(
+                "add",
+                "missingFunctionTest",
+                vec![serde_json::json!(5), serde_json::json!(3)],
+                ExecOptions::new(),
+            )
+            .await;
+
+        assert!(result_module.is_err());
+        assert!(matches!(
+            result_module.unwrap_err(),
+            RuntimeError::MissingModule(name) if name == "missingModuleTest"
+        ));
+
+        assert!(result_function.is_err());
+        // With proper multi-module support, the function name is just the function name
+        assert!(matches!(
+            result_function.unwrap_err(),
+            RuntimeError::MissingExportedFunction(name) if name == "missingFunctionTest"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_pool_dynamic_module_addition() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let add_code = r#"
+            function add(a, b) { return a + b; }
+            export default { add };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(2)
+            .add_module("add", add_code.to_string())
+            .build()
+            .unwrap();
+
+        // Add a new module dynamically
+        let subtract_code = r#"
+            function subtract(a, b) { return a - b; }
+            export default { subtract };
+        "#;
+
+        pool.add_module("subtract", subtract_code.to_string())
+            .await
+            .unwrap();
+
+        let result: i32 = pool
+            .exec(
+                "subtract",
+                "subtract",
+                vec![serde_json::json!(10), serde_json::json!(3)],
+                ExecOptions::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, 7);
+    }
+
+    #[tokio::test]
+    async fn test_pool_multiple_functions_in_one_module() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        // One module with multiple functions!
+        let math_utils = r#"
+            function add(a, b) { return a + b; }
+            function subtract(a, b) { return a - b; }
+            function multiply(a, b) { return a * b; }
+            function divide(a, b) { return a / b; }
+            export default { add, subtract, multiply, divide };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(2)
+            .add_module("math_utils", math_utils.to_string())
+            .build()
+            .unwrap();
+
+        // Call different functions from the same module
+        let sum: i32 = pool
+            .exec(
+                "math_utils",
+                "add",
+                vec![serde_json::json!(10), serde_json::json!(5)],
+                ExecOptions::new(),
+            )
+            .await
+            .unwrap();
+
+        let difference: i32 = pool
+            .exec(
+                "math_utils",
+                "subtract",
+                vec![serde_json::json!(10), serde_json::json!(5)],
+                ExecOptions::new(),
+            )
+            .await
+            .unwrap();
+
+        let product: i32 = pool
+            .exec(
+                "math_utils",
+                "multiply",
+                vec![serde_json::json!(10), serde_json::json!(5)],
+                ExecOptions::new(),
+            )
+            .await
+            .unwrap();
+
+        let quotient: i32 = pool
+            .exec(
+                "math_utils",
+                "divide",
+                vec![serde_json::json!(10), serde_json::json!(5)],
+                ExecOptions::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(sum, 15);
+        assert_eq!(difference, 5);
+        assert_eq!(product, 50);
+        assert_eq!(quotient, 2);
+    }
+
+    #[tokio::test]
+    async fn test_pool_mixed_sync_and_async_functions() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        // Module with both sync and async functions
+        let mixed_code = r#"
+            function syncAdd(a, b) {
+                return a + b;
             }
-            export default { test_all };
-        "#
-        .to_string();
+            
+            async function asyncMultiply(a, b) {
+                // Simulate async operation
+                await new Promise(resolve => setTimeout(resolve, 1));
+                return a * b;
+            }
+            
+            export default { syncAdd, asyncMultiply };
+        "#;
 
-        let pool = JSPoolExecutor::<(), String>::new(
-            js_code,
-            10, // Multiple executor to test cache persistence across the pool
-            None,
-            Duration::from_secs(2),
-            false,
-            "test_all".to_string(),
-        )
-        .await
-        .expect("Failed to create JSPoolExecutor");
+        let pool = Pool::builder()
+            .max_size(2)
+            .add_module("mixed", mixed_code.to_string())
+            .build()
+            .unwrap();
 
-        // To test that the cache is shared
-        for i in 1..20 {
-            let result = pool
-                .exec(
-                    (),
-                    None,
-                    ExecOption {
-                        timeout: Duration::from_secs(2),
-                        allowed_hosts: None,
-                    },
-                )
+        let sync_result: i32 = pool
+            .exec(
+                "mixed",
+                "syncAdd",
+                vec![serde_json::json!(5), serde_json::json!(3)],
+                ExecOptions::new(),
+            )
+            .await
+            .unwrap();
+
+        let async_result: i32 = pool
+            .exec(
+                "mixed",
+                "asyncMultiply",
+                vec![serde_json::json!(5), serde_json::json!(3)],
+                ExecOptions::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(sync_result, 8);
+        assert_eq!(async_result, 15);
+    }
+
+    #[tokio::test]
+    async fn test_pool_shared_cache() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let js_code = r#"
+            function increment() {
+                const count = this.context.cache.get("counter") || 0;
+                const newCount = count + 1;
+                this.context.cache.set("counter", newCount);
+                return newCount;
+            }
+            export default { increment };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(3)
+            .add_module("counter", js_code.to_string())
+            .build()
+            .unwrap();
+
+        // Execute multiple times to test the cache across workers
+        for i in 1..=10 {
+            let result: i32 = pool
+                .exec("counter", "increment", (), ExecOptions::new())
                 .await
-                .expect("Execution failed");
-
-            assert_eq!(result, format!("count: {i}"));
+                .unwrap();
+            assert_eq!(result, i);
         }
+    }
+
+    #[tokio::test]
+    async fn test_pool_module_versioning_and_worker_recycling() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let initial_code = r#"
+            function getValue() {
+                return 100;
+            }
+            export default { getValue };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(2)
+            .add_module("versioned", initial_code.to_string())
+            .build()
+            .unwrap();
+
+        assert_eq!(pool.manager.version(), 0);
+
+        let result1: i32 = pool
+            .exec("versioned", "getValue", (), ExecOptions::new())
+            .await
+            .unwrap();
+        assert_eq!(result1, 100);
+
+        // Get a worker to ensure it's in the pool
+        let worker = pool.inner.get().await.unwrap();
+        let worker_version_before = worker.version();
+        assert_eq!(worker_version_before, 0);
+        drop(worker);
+
+        // Update the module with new code
+        let updated_code = r#"
+            function getValue() {
+                return 200;
+            }
+            export default { getValue };
+        "#;
+
+        pool.add_module("versioned", updated_code.to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(pool.manager.version(), 1);
+
+        // Execute with updated code, this should use a new worker or recycled worker
+        let result2: i32 = pool
+            .exec("versioned", "getValue", (), ExecOptions::new())
+            .await
+            .unwrap();
+        assert_eq!(result2, 200, "Updated module should return new value");
+
+        // Get a worker and verify it has the new version
+        let worker = pool.inner.get().await.unwrap();
+        let worker_version_after = worker.version();
+        assert_eq!(
+            worker_version_after, 1,
+            "Worker should have updated version after module update"
+        );
+        drop(worker);
+
+        let updated_code_v2 = r#"
+            function getValue() {
+                return 300;
+            }
+            export default { getValue };
+        "#;
+
+        pool.add_module("versioned", updated_code_v2.to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(pool.manager.version(), 2);
+
+        let result3: i32 = pool
+            .exec("versioned", "getValue", (), ExecOptions::new())
+            .await
+            .unwrap();
+        assert_eq!(result3, 300, "Second update should return newest value");
     }
 }

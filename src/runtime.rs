@@ -12,7 +12,6 @@ use tracing::{debug, info, warn};
 use crate::{
     orama_extension::{ChannelStorage, OutputChannel, SharedCache, StdoutHandler, StdoutHandlerFn},
     permission::CustomPermissions,
-    runner::JSRunnerError,
 };
 
 use super::parameters::TryIntoFunctionParameters;
@@ -48,8 +47,8 @@ pub enum RuntimeError {
     SerdeError(#[from] serde_json::Error),
     #[error("Compilation error: {0}")]
     CompilationError(Box<deno_core::error::JsError>),
-    #[error("Parameter error: {0}")]
-    ParameterError(#[from] JSRunnerError),
+    // #[error("Parameter error: {0}")]
+    // ParameterError(#[from] JSRunnerError),
     #[error("unknown")]
     Unknown,
 }
