@@ -5,6 +5,20 @@ use crate::OutputChannel;
 
 pub use crate::permission::DomainPermission;
 
+/// Policy for when to recycle/invalidate a runtime
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RecyclePolicy {
+    /// Never recycle runtime (reuse until timeout/crash)
+    Never,
+    /// Recycle on timeout only (current default behavior)
+    OnTimeout,
+    /// Recycle on any error
+    OnError,
+    /// Recycle on timeout or error
+    #[default]
+    OnTimeoutOrError,
+}
+
 #[derive(Debug, Clone)]
 pub struct ExecOptions {
     pub timeout: Duration,
@@ -51,6 +65,7 @@ impl Default for ExecOptions {
 pub struct WorkerOptions {
     pub evaluation_timeout: Duration,
     pub domain_permission: DomainPermission,
+    pub recycle_policy: RecyclePolicy,
 }
 
 impl WorkerOptions {
@@ -67,6 +82,11 @@ impl WorkerOptions {
         self.domain_permission = permission;
         self
     }
+
+    pub fn with_recycle_policy(mut self, policy: RecyclePolicy) -> Self {
+        self.recycle_policy = policy;
+        self
+    }
 }
 
 impl Default for WorkerOptions {
@@ -74,6 +94,7 @@ impl Default for WorkerOptions {
         Self {
             evaluation_timeout: Duration::from_secs(5),
             domain_permission: DomainPermission::DenyAll,
+            recycle_policy: RecyclePolicy::default(),
         }
     }
 }

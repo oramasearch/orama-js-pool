@@ -10,7 +10,7 @@ mod runtime;
 mod worker;
 
 pub use manager::{ModuleDefinition, WorkerManager};
-pub use options::{DomainPermission, ExecOptions, WorkerOptions};
+pub use options::{DomainPermission, ExecOptions, RecyclePolicy, WorkerOptions};
 pub use orama_extension::{OutputChannel, SharedCache};
 pub use parameters::{FunctionParameters, TryIntoFunctionParameters};
 pub use pool::{Pool, PoolBuilder};

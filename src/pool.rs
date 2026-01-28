@@ -76,6 +76,7 @@ pub struct PoolBuilder {
     max_size: usize,
     domain_permission: Option<DomainPermission>,
     evaluation_timeout: Option<std::time::Duration>,
+    recycle_policy: Option<super::options::RecyclePolicy>,
 }
 
 impl PoolBuilder {
@@ -86,6 +87,7 @@ impl PoolBuilder {
             max_size: 10,
             domain_permission: None,
             evaluation_timeout: None,
+            recycle_policy: None,
         }
     }
 
@@ -104,6 +106,12 @@ impl PoolBuilder {
     /// Set domain permission for all workers and modules
     pub fn with_domain_permission(mut self, permission: DomainPermission) -> Self {
         self.domain_permission = Some(permission);
+        self
+    }
+
+    /// Set the recycle policy for all workers
+    pub fn with_recycle_policy(mut self, policy: super::options::RecyclePolicy) -> Self {
+        self.recycle_policy = Some(policy);
         self
     }
 
@@ -130,7 +138,8 @@ impl PoolBuilder {
         // Construct WorkerOptions from individual fields
         let worker_options = WorkerOptions {
             evaluation_timeout: self.evaluation_timeout.unwrap_or(Duration::from_secs(5)),
-            domain_permission: self.domain_permission.unwrap_or(DomainPermission::DenyAll),
+            domain_permission: self.domain_permission.unwrap_or_default(),
+            recycle_policy: self.recycle_policy.unwrap_or_default(),
         };
 
         let manager = WorkerManager::new(self.modules, cache, worker_options);
@@ -157,7 +166,7 @@ impl Default for PoolBuilder {
 mod tests {
     use std::sync::Arc;
 
-    use crate::OutputChannel;
+    use crate::{OutputChannel, RecyclePolicy};
 
     use super::*;
 
@@ -870,5 +879,193 @@ mod tests {
             outputs.to_vec(),
             vec!["out test output\n", "err test error\n"]
         )
+    }
+
+    #[tokio::test]
+    async fn test_recycle_policy_on_error() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let error_code = r#"
+            let callCount = 0;
+            function maybeError(shouldError) {
+                callCount++;
+                if (shouldError) {
+                    throw new Error("Test error");
+                }
+                return callCount;
+            }
+            export default { maybeError };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(1)
+            .add_module("error_test", error_code.to_string())
+            .with_recycle_policy(RecyclePolicy::OnError)
+            .build()
+            .unwrap();
+
+        // First call - should succeed
+        let result1: i32 = pool
+            .exec("error_test", "maybeError", false, ExecOptions::new())
+            .await
+            .unwrap();
+        assert_eq!(result1, 1);
+
+        // Second call with error - should fail
+        let result2: Result<i32, RuntimeError> = pool
+            .exec("error_test", "maybeError", true, ExecOptions::new())
+            .await;
+        assert!(result2.is_err());
+
+        // Third call - should succeed with fresh runtime (callCount reset to 1)
+        let result3: i32 = pool
+            .exec("error_test", "maybeError", false, ExecOptions::new())
+            .await
+            .unwrap();
+        assert_eq!(result3, 1, "Runtime should have been recycled after error");
+    }
+
+    #[tokio::test]
+    async fn test_recycle_policy_never() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let counter_code = r#"
+            let callCount = 0;
+            function incrementCounter() {
+                callCount++;
+                return callCount;
+            }
+            export default { incrementCounter };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(1)
+            .add_module("counter", counter_code.to_string())
+            .with_recycle_policy(RecyclePolicy::Never)
+            .build()
+            .unwrap();
+
+        // Each call should reuse the same runtime and increment
+        for i in 1..=3 {
+            let result: i32 = pool
+                .exec("counter", "incrementCounter", (), ExecOptions::new())
+                .await
+                .unwrap();
+            assert_eq!(result, i, "Runtime should persist across calls");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_recycle_policy_timeout_or_error() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let counter_code = r#"
+            let callCount = 0;
+            function incrementCounter() {
+                callCount++;
+                if (callCount == 2){
+                    throw new Error("error");
+                }
+                return callCount;
+            }
+            export default { incrementCounter };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(1)
+            .add_module("counter", counter_code.to_string())
+            .with_recycle_policy(RecyclePolicy::OnTimeoutOrError)
+            .build()
+            .unwrap();
+
+        let result: i32 = pool
+            .exec("counter", "incrementCounter", (), ExecOptions::new())
+            .await
+            .unwrap();
+        assert_eq!(result, 1);
+
+        // Second call should error (callCount == 2)
+        let result: Result<i32, RuntimeError> = pool
+            .exec("counter", "incrementCounter", (), ExecOptions::new())
+            .await;
+        assert!(result.is_err(), "Should error on second call");
+
+        // Third call should succeed with fresh runtime (callCount reset to 1)
+        let result: i32 = pool
+            .exec("counter", "incrementCounter", (), ExecOptions::new())
+            .await
+            .unwrap();
+        assert_eq!(result, 1, "Runtime should have been recycled after error");
+    }
+
+    #[tokio::test]
+    async fn test_recycle_policy_on_error_with_network_denial() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let fetch_code = r#"
+            let callCount = 0;
+            async function fetchOrCount(url) {
+                callCount++;
+                if (url) {
+                    const response = await fetch(url);
+                    return await response.text();
+                }
+                return callCount;
+            }
+            export default { fetchOrCount };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(1)
+            .add_module("fetcher", fetch_code.to_string())
+            .with_domain_permission(DomainPermission::Deny(vec!["blocked.test".to_string()]))
+            .with_recycle_policy(RecyclePolicy::OnError)
+            .build()
+            .unwrap();
+
+        let result1: i32 = pool
+            .exec(
+                "fetcher",
+                "fetchOrCount",
+                (None::<String>,),
+                ExecOptions::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result1, 1);
+
+        // Second call - with blocked URL, should fail with network permission error
+        let result2: Result<String, RuntimeError> = pool
+            .exec(
+                "fetcher",
+                "fetchOrCount",
+                ("https://blocked.test",),
+                ExecOptions::new().with_timeout(Duration::from_secs(2)),
+            )
+            .await;
+
+        assert!(result2.is_err(), "Should error on blocked domain");
+        assert!(
+            matches!(
+                result2.unwrap_err(),
+                RuntimeError::NetworkPermissionDenied(_)
+            ),
+            "Should be NetworkPermissionDenied error"
+        );
+
+        let result3: i32 = pool
+            .exec(
+                "fetcher",
+                "fetchOrCount",
+                (None::<String>,),
+                ExecOptions::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result3, 3,
+            "Runtime should NOT have been recycled after network permission denial (permission errors are not runtime errors)"
+        );
     }
 }

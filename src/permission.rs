@@ -7,9 +7,10 @@ use deno_web::TimersPermission;
 pub const DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING: &str = "Domain not allowed";
 
 /// Domain permission policy for network access
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
 pub enum DomainPermission {
+    #[default]
     DenyAll,
     AllowAll,
     Allow(Vec<String>),

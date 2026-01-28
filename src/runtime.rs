@@ -12,6 +12,7 @@ use tracing::{debug, warn};
 use crate::{
     orama_extension::{ChannelStorage, OutputChannel, SharedCache, StdoutHandler, StdoutHandlerFn},
     permission::CustomPermissions,
+    RecyclePolicy,
 };
 
 use super::parameters::TryIntoFunctionParameters;
@@ -87,6 +88,8 @@ pub struct Runtime<Input, Output> {
     sender: tokio::sync::mpsc::Sender<RuntimeEvent>,
     exec_count: u64,
     timed_out: bool,
+    errored: bool,
+    recycle_policy: RecyclePolicy,
     loaded_modules: HashMap<String, String>, // module_name -> specifier
     _p: PhantomData<(Input, Output)>,
 }
@@ -104,6 +107,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
         domain_permission: super::options::DomainPermission,
         evaluation_timeout: Duration,
         shared_cache: SharedCache,
+        recycle_policy: RecyclePolicy,
     ) -> Result<Self, RuntimeError> {
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<RuntimeEvent>(1);
         let (init_sender1, init_receiver1) =
@@ -266,6 +270,8 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                 sender,
                 exec_count: 0,
                 timed_out: false,
+                errored: false,
+                recycle_policy,
                 loaded_modules: HashMap::new(),
                 _p: PhantomData,
             }),
@@ -401,7 +407,14 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                 unreachable!("Receiver error");
             }
             Ok(Ok(Ok(t))) => t,
-            Ok(Ok(Err(e))) => return Err(e),
+            Ok(Ok(Err(e))) => {
+                // Mark as errored for recycle policy, but NOT for permission errors
+                // Permission errors are expected behavior (security enforcement), not runtime errors
+                if !matches!(e, RuntimeError::NetworkPermissionDenied(_)) {
+                    self.errored = true;
+                }
+                return Err(e);
+            }
         };
 
         let output: Output = serde_json::from_value(output).map_err(RuntimeError::SerdeError)?;
@@ -409,9 +422,21 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
         Ok(output)
     }
 
-    /// Check if the runtime is still alive
+    /// Check if the runtime is still alive based on recycle policy
     pub fn is_alive(&self) -> bool {
-        !(self.timed_out || self.join_handler.is_finished())
+        use super::options::RecyclePolicy;
+
+        if self.join_handler.is_finished() {
+            return false;
+        }
+
+        // Apply recycle policy
+        match self.recycle_policy {
+            RecyclePolicy::Never => true,
+            RecyclePolicy::OnTimeout => !self.timed_out,
+            RecyclePolicy::OnError => !self.errored,
+            RecyclePolicy::OnTimeoutOrError => !(self.timed_out || self.errored),
+        }
     }
 }
 

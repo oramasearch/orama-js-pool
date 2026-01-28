@@ -4,7 +4,7 @@ use deno_core::ModuleCodeString;
 use serde::de::DeserializeOwned;
 use tracing::warn;
 
-use crate::orama_extension::SharedCache;
+use crate::{options::RecyclePolicy, orama_extension::SharedCache};
 
 use super::{
     options::{DomainPermission, ExecOptions},
@@ -27,6 +27,7 @@ pub struct Worker {
     version: u64,
     domain_permission: DomainPermission,
     evaluation_timeout: std::time::Duration,
+    recycle_policy: RecyclePolicy,
 }
 
 impl Worker {
@@ -36,6 +37,7 @@ impl Worker {
         version: u64,
         domain_permission: DomainPermission,
         evaluation_timeout: std::time::Duration,
+        recycle_policy: RecyclePolicy,
     ) -> Self {
         Self {
             runtime: None,
@@ -44,6 +46,7 @@ impl Worker {
             version,
             domain_permission,
             evaluation_timeout,
+            recycle_policy,
         }
     }
 
@@ -70,6 +73,7 @@ impl Worker {
                 self.domain_permission.clone(),
                 self.evaluation_timeout,
                 self.cache.clone(),
+                self.recycle_policy,
             )
             .await?;
             self.runtime = Some(runtime);
@@ -88,6 +92,7 @@ impl Worker {
             self.domain_permission.clone(),
             self.evaluation_timeout,
             self.cache.clone(),
+            self.recycle_policy,
         )
         .await?;
 
@@ -171,6 +176,7 @@ pub struct WorkerBuilder {
     version: Option<u64>,
     domain_permission: Option<DomainPermission>,
     evaluation_timeout: Option<std::time::Duration>,
+    recycle_policy: Option<RecyclePolicy>,
 }
 
 impl WorkerBuilder {
@@ -182,6 +188,7 @@ impl WorkerBuilder {
             version: None,
             domain_permission: None,
             evaluation_timeout: None,
+            recycle_policy: None,
         }
     }
 
@@ -220,16 +227,29 @@ impl WorkerBuilder {
         self
     }
 
+    /// Set the recycle policy
+    pub fn with_recycle_policy(mut self, policy: RecyclePolicy) -> Self {
+        self.recycle_policy = Some(policy);
+        self
+    }
+
     /// Build the worker
     pub async fn build(self) -> Result<Worker, RuntimeError> {
         let cache = self.cache.unwrap_or_default();
         let version = self.version.unwrap_or(0);
-        let domain_permission = self.domain_permission.unwrap_or(DomainPermission::DenyAll);
+        let domain_permission = self.domain_permission.unwrap_or_default();
         let evaluation_timeout = self
             .evaluation_timeout
             .unwrap_or(std::time::Duration::from_secs(5));
+        let recycle_policy = self.recycle_policy.unwrap_or_default();
 
-        let mut worker = Worker::new(cache, version, domain_permission, evaluation_timeout);
+        let mut worker = Worker::new(
+            cache,
+            version,
+            domain_permission,
+            evaluation_timeout,
+            recycle_policy,
+        );
 
         for (name, code) in self.modules {
             worker.add_module(name, code).await?;
