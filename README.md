@@ -48,26 +48,27 @@ async fn main() -> Result<(), RuntimeError> {
 
 ## API Overview
 
-### `JSPoolExecutor`
+### `Pool`
 
-The main entry point. Manages a pool of JS engines for a given code string. Supports both sync and async JS functions.
+Main entry point. Manages a pool of JS workers, each with loaded modules.
 
-- `JSPoolExecutor::<Input, Output>::new(code, pool_size, allowed_hosts, startup_timeout, is_async, function_name)`
-- `exec(params, stdout_stream, ExecOption)` — runs the function with the given parameters. The second parameter is an optional stream to receive stdout/stderr output from the JS function.
+- `Pool::builder()` — creates a new pool builder
+- `PoolBuilder::max_size(n)` — sets worker pool size
+- `PoolBuilder::with_evaluation_timeout(duration)` — module load timeout
+- `PoolBuilder::add_module(name, code)` — loads a module into all workers
+- `exec(module_name, function_name, params, ExecOptions)` — executes a function
 
-**Stdout/Stderr Handling:**
-You can capture JavaScript `console.log` and `console.error` output by providing a stream (such as a broadcast channel sender) to the `stdout_stream` parameter of the `exec` method. This allows you to handle or redirect JS stdout/stderr as it is produced during execution. See `stream_console` example.
-
-### `ExecOption`
+### `ExecOptions`
 
 Per-execution configuration:
 
-- `timeout`: Maximum execution time per call
-- `allowed_hosts`: Restrict HTTP access for the JS code (optional)
+- `with_timeout(duration)`: Maximum execution time
+- `with_allowed_hosts(hosts)`: Restrict HTTP access
+- `with_stdout_stream(sender)`: Capture console.log/error output
 
-### `JSRunnerError`
+### `RuntimeError`
 
-All errors (startup, execution, JS exceptions) are reported as `JSRunnerError`.
+All errors (startup, execution, JS exceptions) are reported as `RuntimeError`.
 
 ## Features
 
