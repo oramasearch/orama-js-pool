@@ -4,10 +4,7 @@ use deno_core::ModuleCodeString;
 use serde::de::DeserializeOwned;
 use tracing::info;
 
-use crate::{
-    orama_extension::SharedCache,
-    parameters::TryIntoFunctionParameters,
-};
+use crate::{orama_extension::SharedCache, parameters::TryIntoFunctionParameters};
 
 use super::{
     options::{ExecOptions, ModuleOptions},
@@ -77,7 +74,6 @@ impl Worker {
         &mut self,
         module_name: &str,
         function_name: &str,
-        is_async: bool,
         params: Input,
         exec_options: ExecOptions,
     ) -> Result<Output, RuntimeError>
@@ -116,7 +112,6 @@ impl Worker {
             .runtime
             .exec(
                 function_name.to_string(),
-                is_async,
                 params_value,
                 exec_options.stdout_sender,
                 // TODO: fix also the allowd hosts
@@ -197,9 +192,7 @@ impl WorkerBuilder {
         let mut worker = Worker::new(cache, version);
 
         for (name, def) in self.modules {
-            worker
-                .add_module(name, def.code, def.options)
-                .await?;
+            worker.add_module(name, def.code, def.options).await?;
         }
 
         Ok(worker)

@@ -57,7 +57,6 @@ enum RuntimeEvent {
     CheckFunction(String, tokio::sync::oneshot::Sender<u8>),
     ExecFunction {
         id: u64,
-        is_async: bool,
         function_name: String,
         input_params: String,
         stdout_sender: Option<Arc<tokio::sync::broadcast::Sender<(OutputChannel, String)>>>,
@@ -82,7 +81,9 @@ impl<Input, Output> Drop for Runtime<Input, Output> {
     }
 }
 
-impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 'static> Runtime<Input, Output> {
+impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 'static>
+    Runtime<Input, Output>
+{
     /// Create a new runtime with the given JS code
     pub async fn new<Code: Into<ModuleCodeString> + Send + 'static>(
         code: Code,
@@ -195,7 +196,6 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                         }
                         RuntimeEvent::ExecFunction {
                             id,
-                            is_async,
                             function_name,
                             input_params,
                             stdout_sender,
@@ -209,12 +209,11 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                             let result = execute_function(
                                 &mut js_runtime,
                                 id,
-                                is_async,
                                 &function_name,
                                 &input_params,
                             )
                             .await;
-                            
+
                             let is_err = result.is_err();
                             let _ = sender.send(result);
 
@@ -321,7 +320,6 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
     pub async fn exec(
         &mut self,
         function_name: String,
-        is_async: bool,
         params: Input,
         stdout_sender: Option<Arc<tokio::sync::broadcast::Sender<(OutputChannel, String)>>>,
         allowed_hosts: Option<Vec<String>>,
@@ -345,7 +343,6 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
         self.sender
             .send(RuntimeEvent::ExecFunction {
                 id,
-                is_async,
                 function_name,
                 input_params,
                 stdout_sender,
@@ -383,10 +380,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
     }
 }
 
-async fn check_function(
-    js_runtime: &mut deno_core::JsRuntime,
-    function_name: &str,
-) -> u8 {
+async fn check_function(js_runtime: &mut deno_core::JsRuntime, function_name: &str) -> u8 {
     let specifier = ModuleSpecifier::parse("file:/0").unwrap();
     let code = format!(
         r#"
@@ -402,7 +396,10 @@ if (typeof main !== 'object') {{
         "#,
     );
 
-    let mod_id = match js_runtime.load_side_es_module_from_code(&specifier, code).await {
+    let mod_id = match js_runtime
+        .load_side_es_module_from_code(&specifier, code)
+        .await
+    {
         Ok(mod_id) => mod_id,
         Err(CoreError::Js(e)) => {
             if e.name.as_ref() == Some(&"SyntaxError".to_string())
@@ -446,13 +443,20 @@ if (typeof main !== 'object') {{
 async fn execute_function(
     js_runtime: &mut deno_core::JsRuntime,
     id: u64,
-    is_async: bool,
     function_name: &str,
     input_params: &str,
 ) -> Result<serde_json::Value, RuntimeError> {
     let specifier = ModuleSpecifier::parse(&format!("file:/{id}")).unwrap();
 
-    let await_keyword = if is_async { "await" } else { "" };
+    // Conditionally await the function result to avoid overhead for sync functions.
+    // We check if the result is async using two conditions:
+    // 1. instanceof Promise - catches native Promises from async functions
+    // 2. thenable check (has a .then method) - catches custom Promise-like objects
+    // This comprehensive check handles:
+    // - Native Promises from async functions
+    // - Thenable objects (custom Promise-like objects with .then())
+    // - Promises from transpiled/bundled code that may use different Promise implementations
+    // For synchronous functions, we avoid the microtask scheduling overhead of await.
     let code = format!(
         r#"
 import main from "{MAIN_IMPORT_MODULE_NAME}";
@@ -465,13 +469,19 @@ const thisContext = {{
         }},
     }}
 }};
-globalThis.{GLOBAL_VARIABLE_NAME} = {await_keyword} main.{function_name}.call(thisContext, ...{input_params});
+
+const result = main.{function_name}.call(thisContext, ...{input_params});
+const isAsync = result instanceof Promise || (result && typeof result.then === 'function');
+globalThis.{GLOBAL_VARIABLE_NAME} = isAsync ? await result : result;
         "#,
     );
 
     info!("Running code");
 
-    let mod_id = match js_runtime.load_side_es_module_from_code(&specifier, code).await {
+    let mod_id = match js_runtime
+        .load_side_es_module_from_code(&specifier, code)
+        .await
+    {
         Ok(mod_id) => mod_id,
         Err(e) => {
             panic!("load_side_es_module_from_code {e:?}");

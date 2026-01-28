@@ -27,7 +27,6 @@ impl Pool {
         &self,
         module_name: &str,
         function_name: &str,
-        is_async: bool,
         params: Input,
         exec_options: ExecOptions,
     ) -> Result<Output, RuntimeError>
@@ -40,9 +39,9 @@ impl Pool {
             RuntimeError::Unknown
         })?;
 
-        // Execute on the worker
-        worker.exec(module_name, function_name, is_async, params, exec_options).await
-        // Worker is automatically returned to pool when dropped
+        worker
+            .exec(module_name, function_name, params, exec_options)
+            .await
     }
 
     /// Add or update a module in the pool
@@ -175,7 +174,6 @@ mod tests {
             .exec(
                 "math",
                 "add",
-                false,
                 vec![serde_json::json!(5), serde_json::json!(3)],
                 ExecOptions::new(),
             )
@@ -201,11 +199,7 @@ mod tests {
 
         let pool = Pool::builder()
             .max_size(2)
-            .add_module(
-                "add",
-                add_code.to_string(),
-                ModuleOptions::default(),
-            )
+            .add_module("add", add_code.to_string(), ModuleOptions::default())
             .add_module(
                 "multiply",
                 multiply_code.to_string(),
@@ -218,7 +212,6 @@ mod tests {
             .exec(
                 "add",
                 "add",
-                false,
                 vec![serde_json::json!(5), serde_json::json!(3)],
                 ExecOptions::new(),
             )
@@ -229,7 +222,6 @@ mod tests {
             .exec(
                 "multiply",
                 "multiply",
-                false,
                 vec![serde_json::json!(5), serde_json::json!(3)],
                 ExecOptions::new(),
             )
@@ -251,11 +243,7 @@ mod tests {
 
         let pool = Pool::builder()
             .max_size(2)
-            .add_module(
-                "add",
-                add_code.to_string(),
-                ModuleOptions::default(),
-            )
+            .add_module("add", add_code.to_string(), ModuleOptions::default())
             .build()
             .unwrap();
 
@@ -277,7 +265,6 @@ mod tests {
             .exec(
                 "subtract",
                 "subtract",
-                false,
                 vec![serde_json::json!(10), serde_json::json!(3)],
                 ExecOptions::new(),
             )
@@ -315,7 +302,6 @@ mod tests {
             .exec(
                 "math_utils",
                 "add",
-                false,
                 vec![serde_json::json!(10), serde_json::json!(5)],
                 ExecOptions::new(),
             )
@@ -326,7 +312,6 @@ mod tests {
             .exec(
                 "math_utils",
                 "subtract",
-                false,
                 vec![serde_json::json!(10), serde_json::json!(5)],
                 ExecOptions::new(),
             )
@@ -337,7 +322,6 @@ mod tests {
             .exec(
                 "math_utils",
                 "multiply",
-                false,
                 vec![serde_json::json!(10), serde_json::json!(5)],
                 ExecOptions::new(),
             )
@@ -348,7 +332,6 @@ mod tests {
             .exec(
                 "math_utils",
                 "divide",
-                false,
                 vec![serde_json::json!(10), serde_json::json!(5)],
                 ExecOptions::new(),
             )
@@ -359,6 +342,55 @@ mod tests {
         assert_eq!(difference, 5);
         assert_eq!(product, 50);
         assert_eq!(quotient, 2);
+    }
+
+    #[tokio::test]
+    async fn test_pool_mixed_sync_and_async_functions() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        // Module with both sync and async functions
+        let mixed_code = r#"
+            function syncAdd(a, b) {
+                return a + b;
+            }
+            
+            async function asyncMultiply(a, b) {
+                // Simulate async operation
+                await new Promise(resolve => setTimeout(resolve, 1));
+                return a * b;
+            }
+            
+            export default { syncAdd, asyncMultiply };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(2)
+            .add_module("mixed", mixed_code.to_string(), ModuleOptions::default())
+            .build()
+            .unwrap();
+
+        let sync_result: i32 = pool
+            .exec(
+                "mixed",
+                "syncAdd",
+                vec![serde_json::json!(5), serde_json::json!(3)],
+                ExecOptions::new(),
+            )
+            .await
+            .unwrap();
+
+        let async_result: i32 = pool
+            .exec(
+                "mixed",
+                "asyncMultiply",
+                vec![serde_json::json!(5), serde_json::json!(3)],
+                ExecOptions::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(sync_result, 8);
+        assert_eq!(async_result, 15);
     }
 
     #[tokio::test]
@@ -377,17 +409,16 @@ mod tests {
 
         let pool = Pool::builder()
             .max_size(3)
-            .add_module(
-                "counter",
-                js_code.to_string(),
-                ModuleOptions::default(),
-            )
+            .add_module("counter", js_code.to_string(), ModuleOptions::default())
             .build()
             .unwrap();
 
-        // Execute multiple times - cache should be shared across workers
+        // Execute multiple times to test the cache across workers
         for i in 1..=10 {
-            let result: i32 = pool.exec("counter", "increment", false, (), ExecOptions::new()).await.unwrap();
+            let result: i32 = pool
+                .exec("counter", "increment", (), ExecOptions::new())
+                .await
+                .unwrap();
             assert_eq!(result, i);
         }
     }
