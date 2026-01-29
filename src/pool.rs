@@ -996,6 +996,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_not_recreate_instance_on_error() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let error_code = r#"
+            let callCount = 0;
+            function maybeError(shouldError) {
+                if (shouldError) {
+                    throw new Error("Test error");
+                }
+                callCount++;
+                return callCount;
+            }
+            export default { maybeError };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(1)
+            .add_module("error_test", error_code.to_string())
+            .with_recycle_policy(RecyclePolicy::Never)
+            .build()
+            .await
+            .unwrap();
+
+        let result1: i32 = pool
+            .exec("error_test", "maybeError", false, ExecOptions::new())
+            .await
+            .unwrap();
+        assert_eq!(result1, 1);
+
+        let result2: Result<i32, RuntimeError> = pool
+            .exec("error_test", "maybeError", true, ExecOptions::new())
+            .await;
+        assert!(result2.is_err());
+
+        let result3: i32 = pool
+            .exec("error_test", "maybeError", false, ExecOptions::new())
+            .await
+            .unwrap();
+        assert_eq!(result3, 2, "Runtime should have been recycled after error");
+    }
+
+    #[tokio::test]
     async fn test_recycle_policy_on_error() {
         let _ = tracing_subscriber::fmt::try_init();
 
