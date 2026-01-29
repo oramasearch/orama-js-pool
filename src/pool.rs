@@ -13,6 +13,7 @@ use super::{
     runtime::RuntimeError,
 };
 
+#[derive(Clone)]
 pub struct Pool {
     inner: deadpool::managed::Pool<WorkerManager>,
     manager: WorkerManager,
