@@ -18,7 +18,8 @@ async fn main() -> Result<(), RuntimeError> {
         .max_size(10) // 10 workers in the pool
         .with_evaluation_timeout(Duration::from_millis(200))
         .add_module("calculator", CODE_SUM.to_string())
-        .build()?;
+        .build()
+        .await?;
 
     let stdin = tokio::io::stdin();
     let mut c = BufReader::new(stdin);

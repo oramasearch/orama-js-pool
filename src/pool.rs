@@ -12,6 +12,7 @@ use super::{
     options::{DomainPermission, ExecOptions, WorkerOptions},
     parameters::TryIntoFunctionParameters,
     runtime::RuntimeError,
+    worker::WorkerBuilder,
 };
 
 /// A pool of JavaScript workers that can execute functions from loaded modules.
@@ -176,7 +177,7 @@ impl PoolBuilder {
     }
 
     /// Build the pool
-    pub fn build(self) -> Result<Pool, RuntimeError> {
+    pub async fn build(self) -> Result<Pool, RuntimeError> {
         let cache = SharedCache::new();
 
         let worker_options = WorkerOptions {
@@ -184,6 +185,22 @@ impl PoolBuilder {
             domain_permission: self.domain_permission.unwrap_or_default(),
             recycle_policy: self.recycle_policy.unwrap_or_default(),
         };
+
+        // Validate that all modules can be loaded within the evaluation timeout
+        // by creating a test worker
+        if !self.modules.is_empty() {
+            let mut builder = WorkerBuilder::new()
+                .with_cache(cache.clone())
+                .with_domain_permission(worker_options.domain_permission.clone())
+                .with_evaluation_timeout(worker_options.evaluation_timeout);
+
+            for (name, def) in &self.modules {
+                builder = builder.add_module(name, def.code.clone());
+            }
+
+            // This will fail if any module takes longer than evaluation_timeout to load
+            builder.build().await?;
+        }
 
         let manager = WorkerManager::new(self.modules, cache, worker_options);
 
@@ -228,6 +245,7 @@ mod tests {
             .max_size(2)
             .add_module("math", js_code.to_string())
             .build()
+            .await
             .unwrap();
 
         let result: i32 = pool
@@ -257,6 +275,7 @@ mod tests {
             .add_module("add", add_code.to_string())
             .add_module("multiply", multiply_code.to_string())
             .build()
+            .await
             .unwrap();
 
         let result1: i32 = pool
@@ -296,6 +315,7 @@ mod tests {
             .max_size(2)
             .add_module("add", add_code.to_string())
             .build()
+            .await
             .unwrap();
 
         let result_module: Result<i32, RuntimeError> = pool
@@ -343,6 +363,7 @@ mod tests {
             .max_size(2)
             .add_module("add", add_code.to_string())
             .build()
+            .await
             .unwrap();
 
         // Add a new module dynamically
@@ -385,6 +406,7 @@ mod tests {
             .max_size(2)
             .add_module("math_utils", math_utils.to_string())
             .build()
+            .await
             .unwrap();
 
         // Call different functions from the same module
@@ -457,6 +479,7 @@ mod tests {
             .max_size(2)
             .add_module("mixed", mixed_code.to_string())
             .build()
+            .await
             .unwrap();
 
         let sync_result: i32 = pool
@@ -501,6 +524,7 @@ mod tests {
             .max_size(3)
             .add_module("counter", js_code.to_string())
             .build()
+            .await
             .unwrap();
 
         // Execute multiple times to test the cache across workers
@@ -528,6 +552,7 @@ mod tests {
             .max_size(2)
             .add_module("versioned", initial_code.to_string())
             .build()
+            .await
             .unwrap();
 
         assert_eq!(pool.manager.version(), 0);
@@ -610,6 +635,7 @@ mod tests {
             .max_size(2)
             .add_module("fetcher", fetch_code.to_string())
             .build()
+            .await
             .unwrap();
 
         let result: Result<String, RuntimeError> = pool
@@ -645,6 +671,7 @@ mod tests {
             .max_size(2)
             .add_module("fetcher", fetch_code.to_string())
             .build()
+            .await
             .unwrap();
 
         let allowed_hosts = DomainPermission::Allow(vec!["allowed-domain.test".to_string()]);
@@ -705,6 +732,7 @@ mod tests {
             .max_size(2)
             .add_module("fetcher", fetch_code.to_string())
             .build()
+            .await
             .unwrap();
 
         let result: Result<String, RuntimeError> = pool
@@ -745,6 +773,7 @@ mod tests {
             .max_size(2)
             .add_module("fetcher", fetch_code.to_string())
             .build()
+            .await
             .unwrap();
 
         let deny_list = DomainPermission::Deny(vec!["blocked-domain.test".to_string()]);
@@ -806,6 +835,7 @@ mod tests {
             .add_module("fetcher", fetch_code.to_string())
             .with_domain_permission(DomainPermission::AllowAll)
             .build()
+            .await
             .unwrap();
 
         let result: Result<String, RuntimeError> = pool
@@ -861,6 +891,7 @@ mod tests {
             .max_size(2)
             .add_module("slow", slow_code.to_string())
             .build()
+            .await
             .unwrap();
 
         let result: Result<String, RuntimeError> = pool
@@ -897,6 +928,7 @@ mod tests {
             .with_domain_permission(DomainPermission::DenyAll)
             .add_module("fetcher", fetch_code.to_string())
             .build()
+            .await
             .unwrap();
 
         let result: Result<String, RuntimeError> = pool
@@ -938,6 +970,7 @@ mod tests {
             .max_size(2)
             .add_module("logger", log_code.to_string())
             .build()
+            .await
             .unwrap();
 
         let (sender, mut receiver) = tokio::sync::broadcast::channel(16);
@@ -1001,6 +1034,7 @@ mod tests {
             .add_module("error_test", error_code.to_string())
             .with_recycle_policy(RecyclePolicy::OnError)
             .build()
+            .await
             .unwrap();
 
         // First call - should succeed
@@ -1045,6 +1079,7 @@ mod tests {
             .add_module("counter", counter_code.to_string())
             .with_recycle_policy(RecyclePolicy::OnTimeoutOrError)
             .build()
+            .await
             .unwrap();
 
         let result: i32 = pool
@@ -1090,6 +1125,7 @@ mod tests {
             .with_domain_permission(DomainPermission::Deny(vec!["blocked.test".to_string()]))
             .with_recycle_policy(RecyclePolicy::OnError)
             .build()
+            .await
             .unwrap();
 
         let result1: i32 = pool
@@ -1154,6 +1190,7 @@ mod tests {
             .max_size(1)
             .with_evaluation_timeout(Duration::from_millis(100))
             .build()
+            .await
             .unwrap();
 
         let result = pool
@@ -1182,5 +1219,31 @@ mod tests {
             "Should not error: {:?}",
             result.unwrap_err()
         );
+    }
+
+    #[tokio::test]
+    async fn test_module_evaluation_timeout_builder() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let expensive_code = r#"
+            await new Promise(resolve => setTimeout(resolve, 10000));
+            function getValue() {
+                return 42;
+            }
+            export default { getValue };
+        "#;
+
+        let result = Pool::builder()
+            .max_size(1)
+            .with_evaluation_timeout(Duration::from_millis(100))
+            .add_module("expensive", expensive_code.to_string())
+            .build()
+            .await;
+
+        assert!(result.is_err(), "Module evaluation should timeout");
+        match result {
+            Ok(_) => todo!(),
+            Err(e) => assert!(matches!(e, RuntimeError::InitTimeout)),
+        }
     }
 }

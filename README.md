@@ -27,7 +27,8 @@ async fn main() -> Result<(), RuntimeError> {
         .max_size(10) // number of workers in the pool
         .with_evaluation_timeout(Duration::from_millis(200)) // module load timeout
         .add_module("async_calculator", CODE_ASYNC_SUM.to_string())
-        .build()?;
+        .build()
+        .await?;
 
     let params = vec![1, 2];
     let result: u8 = pool

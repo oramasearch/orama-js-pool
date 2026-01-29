@@ -63,14 +63,17 @@ fn bench_worker_exec(c: &mut Criterion) {
 }
 
 fn bench_pool_init(c: &mut Criterion) {
+    let rt = TokioRuntime::new().unwrap();
+
     c.bench_function("pool/initialization", |b| {
-        b.iter(|| {
+        b.to_async(&rt).iter(|| async {
             let pool = Pool::builder()
                 .max_size(5)
                 .with_evaluation_timeout(Duration::from_secs(5))
                 .with_domain_permission(DomainPermission::AllowAll)
                 .add_module("benchmark", SIMPLE_CODE.to_string())
                 .build()
+                .await
                 .unwrap();
             black_box(pool);
         });
@@ -81,25 +84,32 @@ fn bench_pool_execution(c: &mut Criterion) {
     let rt = TokioRuntime::new().unwrap();
 
     c.bench_function("pool/exec_add", |b| {
-        let pool = Pool::builder()
-            .max_size(5)
-            .with_evaluation_timeout(Duration::from_secs(5))
-            .with_domain_permission(DomainPermission::AllowAll)
-            .add_module("benchmark", SIMPLE_CODE.to_string())
-            .build()
-            .unwrap();
+        b.iter_custom(|iters| {
+            rt.block_on(async {
+                let pool = Pool::builder()
+                    .max_size(5)
+                    .with_evaluation_timeout(Duration::from_secs(5))
+                    .with_domain_permission(DomainPermission::AllowAll)
+                    .add_module("benchmark", SIMPLE_CODE.to_string())
+                    .build()
+                    .await
+                    .unwrap();
 
-        b.to_async(&rt).iter(|| async {
-            let result: i32 = pool
-                .exec(
-                    "benchmark",
-                    "add",
-                    vec![black_box(5), black_box(10)],
-                    ExecOptions::new().with_timeout(Duration::from_secs(1)),
-                )
-                .await
-                .unwrap();
-            black_box(result);
+                let start = std::time::Instant::now();
+                for _i in 0..iters {
+                    let result: i32 = pool
+                        .exec(
+                            "benchmark",
+                            "add",
+                            vec![black_box(5), black_box(10)],
+                            ExecOptions::new().with_timeout(Duration::from_secs(1)),
+                        )
+                        .await
+                        .unwrap();
+                    black_box(result);
+                }
+                start.elapsed()
+            })
         });
     });
 }

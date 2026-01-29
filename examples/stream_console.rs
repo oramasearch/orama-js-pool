@@ -19,7 +19,8 @@ async fn main() -> Result<(), RuntimeError> {
         .max_size(2) // 2 workers in the pool
         .with_evaluation_timeout(Duration::from_millis(200))
         .add_module("logger", CODE_LOG.to_string())
-        .build()?;
+        .build()
+        .await?;
 
     let (sender, mut receiver) = broadcast::channel::<(OutputChannel, String)>(16);
     let input = json!({

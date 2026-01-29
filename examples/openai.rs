@@ -16,7 +16,8 @@ async fn main() -> Result<(), RuntimeError> {
         .with_evaluation_timeout(Duration::from_millis(200))
         .with_domain_permission(DomainPermission::AllowAll) // Allow all domains for OpenAI API
         .add_module("openai", CODE.to_string())
-        .build()?;
+        .build()
+        .await?;
 
     let params = vec![
         open_api_key,
