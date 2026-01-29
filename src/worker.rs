@@ -316,4 +316,40 @@ mod tests {
             .await
             .unwrap();
     }
+
+    #[tokio::test]
+    async fn test_module_evaluation_domain_permission() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let not_allowed_code = r#"
+            let res = await fetch("http://foo.test");
+            let value = await res.text();
+
+            function getValue() {
+                return value;
+            }
+            export default { getValue };
+        "#;
+
+        let result = Worker::builder()
+            .with_domain_permission(DomainPermission::DenyAll)
+            .add_module("net_call", not_allowed_code.to_string())
+            .build()
+            .await;
+
+        assert!(
+            result.is_err(),
+            "Module evaluation should fail due to network deny"
+        );
+        match result {
+            Err(RuntimeError::InitializationError(e)) => {
+                let error_msg = e.to_string();
+                assert!(
+                    error_msg.contains("network access is denied"),
+                    "Error should contain network deny information, got: {error_msg}",
+                );
+            }
+            _ => panic!("Expected InitializationError with network deny information"),
+        }
+    }
 }
