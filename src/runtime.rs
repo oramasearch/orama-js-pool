@@ -50,8 +50,8 @@ pub enum RuntimeError {
     ParameterError(#[from] serde_json::Error),
     #[error("Compilation error: {0}")]
     CompilationError(Box<deno_core::error::JsError>),
-    #[error("The runtime is dead")]
-    Dead,
+    #[error("The runtime has been terminated")]
+    Terminated,
     #[error("Unknown error: {0}")]
     Unknown(String),
 }
@@ -283,7 +283,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
         code: Code,
     ) -> Result<(), RuntimeError> {
         if !self.is_alive() {
-            return Err(RuntimeError::Dead);
+            return Err(RuntimeError::Terminated);
         }
 
         let code: ModuleCodeString = code.into();
@@ -324,7 +324,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
         function_name: String,
     ) -> Result<(), RuntimeError> {
         if !self.is_alive() {
-            return Err(RuntimeError::Dead);
+            return Err(RuntimeError::Terminated);
         }
 
         let module_specifier = self
@@ -370,7 +370,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
         timeout: Duration,
     ) -> Result<Output, RuntimeError> {
         if !self.is_alive() {
-            return Err(RuntimeError::Dead);
+            return Err(RuntimeError::Terminated);
         }
 
         let module_specifier = self

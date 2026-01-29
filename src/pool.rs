@@ -107,7 +107,7 @@ impl Pool {
         self.inner.get().await.map_err(|e| match e {
             deadpool::managed::PoolError::Backend(err) => match err {
                 // The recycle policy of the poll will prevent this
-                RuntimeError::Dead => unreachable!(),
+                RuntimeError::Terminated => unreachable!(),
                 _ => err,
             },
             _ => RuntimeError::Unknown(e.to_string()),
