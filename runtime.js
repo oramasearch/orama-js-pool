@@ -126,7 +126,7 @@ const windowOrWorkerGlobalScope = {
             return Deno.core.ops.op_stream_to_oramacore_print(msg, level > 1)
         }),
     ),
-    // Coped from;
+    // Coped from:
     // https://github.com/denoland/deno/blob/a02d2201797d5e3436a251ff39e4cde6b2d4a13b/ext/crypto/README.md?plain=1#L13
     Crypto: core.propWritable(crypto.Crypto),
     CryptoKey: core.propWritable(crypto.CryptoKey),
