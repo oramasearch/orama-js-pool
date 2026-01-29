@@ -91,6 +91,7 @@ pub struct Runtime<Input, Output> {
     errored: bool,
     recycle_policy: RecyclePolicy,
     loaded_modules: HashMap<String, String>, // module_name -> specifier
+    evaluation_timeout: Duration,
     _p: PhantomData<(Input, Output)>,
 }
 
@@ -273,6 +274,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                 errored: false,
                 recycle_policy,
                 loaded_modules: HashMap::new(),
+                evaluation_timeout,
                 _p: PhantomData,
             }),
         }
@@ -303,7 +305,14 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
             .await
             .unwrap();
 
-        receiver.await.unwrap()?;
+        tokio::time::timeout(self.evaluation_timeout, receiver)
+            .await
+            .map_err(|_| {
+                warn!("Module evaluation timeout for {module_name}");
+                self.handler.terminate_execution();
+                RuntimeError::InitTimeout
+            })?
+            .unwrap()?;
 
         self.loaded_modules.insert(module_name, specifier);
 

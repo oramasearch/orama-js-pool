@@ -40,11 +40,10 @@ impl Pool {
         Input: TryIntoFunctionParameters + Send + 'static,
         Output: DeserializeOwned + Send + 'static,
     {
-        let mut worker = self
-            .inner
-            .get()
-            .await
-            .map_err(|e| RuntimeError::Unknown(e.to_string()))?;
+        let mut worker = self.inner.get().await.map_err(|e| match e {
+            deadpool::managed::PoolError::Backend(err) => err,
+            _ => RuntimeError::Unknown(e.to_string()),
+        })?;
 
         worker
             .exec(module_name, function_name, params, exec_options)
@@ -1128,5 +1127,44 @@ mod tests {
             result3, 3,
             "Runtime should NOT have been recycled after network permission denial (permission errors are not runtime errors)"
         );
+    }
+
+    #[tokio::test]
+    async fn test_module_evaluation_timeout() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let expensive_code = r#"
+            await new Promise(resolve => setTimeout(resolve, 10000));
+            function getValue() {
+                return 42;
+            }
+            export default { getValue };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(1)
+            .with_evaluation_timeout(Duration::from_millis(100))
+            .add_module("expensive", expensive_code.to_string())
+            .build()
+            .unwrap();
+
+        let result: Result<i32, RuntimeError> = pool
+            .exec("expensive", "getValue", (), ExecOptions::new())
+            .await;
+
+        assert!(result.is_err(), "Module evaluation should timeout");
+        assert!(matches!(result.unwrap_err(), RuntimeError::InitTimeout));
+
+        // also on adding a module
+        pool.add_module("expensive_2", expensive_code.to_string())
+            .await
+            .unwrap();
+
+        let result: Result<i32, RuntimeError> = pool
+            .exec("expensive_2", "getValue", (), ExecOptions::new())
+            .await;
+
+        assert!(result.is_err(), "Module evaluation should timeout");
+        assert!(matches!(result.unwrap_err(), RuntimeError::InitTimeout));
     }
 }
