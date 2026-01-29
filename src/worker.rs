@@ -333,4 +333,43 @@ mod tests {
             _ => panic!("Expected InitializationError with network deny information"),
         }
     }
+
+    #[tokio::test]
+    async fn test_module_override() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let original_code = r#"
+            function getValue() { return 42; }
+            export default { getValue };
+        "#;
+
+        let override_code = r#"
+            function getValue() { return 100; }
+            export default { getValue };
+        "#;
+
+        let mut worker = Worker::builder()
+            .add_module("test", original_code.to_string())
+            .build()
+            .await
+            .unwrap();
+
+        let result: i32 = worker
+            .exec("test", "getValue", (), ExecOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(result, 42);
+
+        // Override the module
+        worker
+            .add_module("test".into(), override_code.to_string())
+            .await
+            .unwrap();
+
+        let result: i32 = worker
+            .exec("test", "getValue", (), ExecOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(result, 100, "Function should return overridden value");
+    }
 }
