@@ -24,16 +24,14 @@ pub struct Worker {
     runtime: Option<Runtime<serde_json::Value, serde_json::Value>>,
     modules: HashMap<String, ModuleInfo>,
     cache: SharedCache,
-    version: u64,
     domain_permission: DomainPermission,
     evaluation_timeout: std::time::Duration,
 }
 
 impl Worker {
-    /// Create a new worker with the given cache, version, and settings
+    /// Create a new worker with the given cache, and settings
     pub(crate) fn new(
         cache: SharedCache,
-        version: u64,
         domain_permission: DomainPermission,
         evaluation_timeout: std::time::Duration,
     ) -> Self {
@@ -41,7 +39,6 @@ impl Worker {
             runtime: None,
             modules: HashMap::new(),
             cache,
-            version,
             domain_permission,
             evaluation_timeout,
         }
@@ -153,11 +150,6 @@ impl Worker {
         self.runtime.as_ref().is_some_and(|rt| rt.is_alive())
     }
 
-    /// Get the version of this worker
-    pub fn version(&self) -> u64 {
-        self.version
-    }
-
     /// Get the shared cache
     pub fn cache(&self) -> &SharedCache {
         &self.cache
@@ -168,7 +160,6 @@ impl Worker {
 pub struct WorkerBuilder {
     modules: Vec<(String, ModuleCodeString)>,
     cache: Option<SharedCache>,
-    version: Option<u64>,
     domain_permission: Option<DomainPermission>,
     evaluation_timeout: Option<std::time::Duration>,
 }
@@ -179,7 +170,6 @@ impl WorkerBuilder {
         Self {
             modules: Vec::new(),
             cache: None,
-            version: None,
             domain_permission: None,
             evaluation_timeout: None,
         }
@@ -202,12 +192,6 @@ impl WorkerBuilder {
         self
     }
 
-    /// Set the version for the worker
-    pub fn with_version(mut self, version: u64) -> Self {
-        self.version = Some(version);
-        self
-    }
-
     /// Set the domain permission for all modules
     pub fn with_domain_permission(mut self, permission: DomainPermission) -> Self {
         self.domain_permission = Some(permission);
@@ -223,13 +207,12 @@ impl WorkerBuilder {
     /// Build the worker
     pub async fn build(self) -> Result<Worker, RuntimeError> {
         let cache = self.cache.unwrap_or_default();
-        let version = self.version.unwrap_or(0);
         let domain_permission = self.domain_permission.unwrap_or_default();
         let evaluation_timeout = self
             .evaluation_timeout
             .unwrap_or(std::time::Duration::from_secs(5));
 
-        let mut worker = Worker::new(cache, version, domain_permission, evaluation_timeout);
+        let mut worker = Worker::new(cache, domain_permission, evaluation_timeout);
 
         for (name, code) in self.modules {
             worker.add_module(name, code).await?;

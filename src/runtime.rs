@@ -107,7 +107,6 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
         evaluation_timeout: Duration,
         shared_cache: SharedCache,
     ) -> Result<Self, RuntimeError> {
-        // Use a larger buffer so events can be queued even if runtime is busy with a long operation
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<RuntimeEvent>(1);
         let (init_sender1, init_receiver1) =
             tokio::sync::oneshot::channel::<Result<IsolateHandle, CoreError>>();

@@ -1,9 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, RwLock,
-    },
+    sync::{Arc, RwLock},
 };
 
 use deadpool::managed::{Manager, Metrics, RecycleError, RecycleResult};
@@ -28,7 +25,6 @@ pub struct ModuleDefinition {
 pub struct WorkerManager {
     modules: Arc<RwLock<HashMap<String, ModuleDefinition>>>,
     cache: SharedCache,
-    version: Arc<AtomicU64>,
     pub(crate) worker_options: WorkerOptions,
 }
 
@@ -41,7 +37,6 @@ impl WorkerManager {
         Self {
             modules: Arc::new(RwLock::new(modules)),
             cache,
-            version: Arc::new(AtomicU64::new(0)),
             worker_options,
         }
     }
@@ -50,14 +45,6 @@ impl WorkerManager {
         let mut modules_guard = self.modules.write().unwrap();
         *modules_guard = modules;
         drop(modules_guard);
-
-        // Increment version to invalidate existing workers
-        self.version.fetch_add(1, Ordering::Release);
-    }
-
-    /// Get current module version
-    pub fn version(&self) -> u64 {
-        self.version.load(Ordering::Acquire)
     }
 
     /// Get a clone of current modules
@@ -78,14 +65,12 @@ impl Manager for WorkerManager {
     /// Create a new worker with current module definitions
     fn create(&self) -> impl Future<Output = Result<Self::Type, Self::Error>> + Send {
         let modules = self.modules.read().unwrap().clone();
-        let version = self.version.load(Ordering::Acquire);
         let cache = self.cache.clone();
         let worker_options = self.worker_options.clone();
 
         async move {
             let mut builder = WorkerBuilder::new()
                 .with_cache(cache)
-                .with_version(version)
                 .with_domain_permission(worker_options.domain_permission)
                 .with_evaluation_timeout(worker_options.evaluation_timeout);
 
@@ -99,25 +84,16 @@ impl Manager for WorkerManager {
         }
     }
 
-    /// Check if a worker is still healthy and has the correct version
-    fn recycle(
+    /// Check if a worker is still healthy
+    async fn recycle(
         &self,
         worker: &mut Self::Type,
         _metrics: &Metrics,
-    ) -> impl Future<Output = RecycleResult<Self::Error>> + Send {
-        let current_version = self.version.load(Ordering::Acquire);
-        let worker_version = worker.version();
-
-        async move {
-            if worker_version != current_version {
-                return Err(RecycleError::Message("Module version mismatch".into()));
-            }
-
-            if !worker.is_alive() {
-                return Err(RecycleError::Message("Worker not alive".into()));
-            }
-
-            Ok(())
+    ) -> RecycleResult<Self::Error> {
+        if !worker.is_alive() {
+            return Err(RecycleError::Message("Worker not alive".into()));
         }
+
+        Ok(())
     }
 }

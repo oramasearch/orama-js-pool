@@ -538,7 +538,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pool_module_versioning_and_worker_recycling() {
+    async fn test_pool_add_module() {
         let _ = tracing_subscriber::fmt::try_init();
 
         let initial_code = r#"
@@ -555,19 +555,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(pool.manager.version(), 0);
-
         let result1: i32 = pool
             .exec("versioned", "getValue", (), ExecOptions::new())
             .await
             .unwrap();
         assert_eq!(result1, 100);
-
-        // Get a worker to ensure it's in the pool
-        let worker = pool.inner.get().await.unwrap();
-        let worker_version_before = worker.version();
-        assert_eq!(worker_version_before, 0);
-        drop(worker);
 
         // Update the module with new code
         let updated_code = r#"
@@ -581,23 +573,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(pool.manager.version(), 1);
-
         // Execute with updated code, this should use a new worker or recycled worker
         let result2: i32 = pool
             .exec("versioned", "getValue", (), ExecOptions::new())
             .await
             .unwrap();
         assert_eq!(result2, 200, "Updated module should return new value");
-
-        // Get a worker and verify it has the new version
-        let worker = pool.inner.get().await.unwrap();
-        let worker_version_after = worker.version();
-        assert_eq!(
-            worker_version_after, 1,
-            "Worker should have updated version after module update"
-        );
-        drop(worker);
 
         let updated_code_v2 = r#"
             function getValue() {
@@ -610,13 +591,14 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(pool.manager.version(), 2);
-
-        let result3: i32 = pool
-            .exec("versioned", "getValue", (), ExecOptions::new())
-            .await
-            .unwrap();
-        assert_eq!(result3, 300, "Second update should return newest value");
+        // Test all the instances
+        for _ in 1..10 {
+            let result3: i32 = pool
+                .exec("versioned", "getValue", (), ExecOptions::new())
+                .await
+                .unwrap();
+            assert_eq!(result3, 300, "Second update should return newest value");
+        }
     }
 
     #[tokio::test]
