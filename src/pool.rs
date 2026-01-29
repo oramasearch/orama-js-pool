@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use deadpool::managed::Object;
 use deno_core::ModuleCodeString;
 use serde::de::DeserializeOwned;
 
-use crate::orama_extension::SharedCache;
+use crate::{orama_extension::SharedCache, RecyclePolicy};
 
 use super::{
     manager::{ModuleDefinition, WorkerManager},
@@ -40,18 +41,34 @@ impl Pool {
         Input: TryIntoFunctionParameters + Send + 'static,
         Output: DeserializeOwned + Send + 'static,
     {
-        let mut worker = self.inner.get().await.map_err(|e| match e {
-            deadpool::managed::PoolError::Backend(err) => match err {
-                // The recycle policy of the poll will prevent this
-                RuntimeError::Dead => unreachable!(),
-                _ => RuntimeError::Unknown(err.to_string()),
-            },
-            _ => RuntimeError::Unknown(e.to_string()),
-        })?;
-
-        worker
+        let mut worker = self.get_worker().await?;
+        let result = worker
             .exec(module_name, function_name, params, exec_options)
-            .await
+            .await;
+
+        if let Err(ref err) = result {
+            let recycle_policy = self.manager.worker_options.recycle_policy;
+
+            let should_discard = match recycle_policy {
+                RecyclePolicy::Never => false,
+                RecyclePolicy::OnTimeout => {
+                    matches!(err, RuntimeError::ExecTimeout)
+                }
+                RecyclePolicy::OnError => !matches!(err, RuntimeError::NetworkPermissionDenied(_)),
+                RecyclePolicy::OnTimeoutOrError => {
+                    matches!(err, RuntimeError::ExecTimeout)
+                        || !matches!(err, RuntimeError::NetworkPermissionDenied(_))
+                }
+            };
+
+            if should_discard {
+                // Take the worker out so it won't be returned to the pool
+                // This will cause the worker to be dropped and a new one created on next use
+                let _ = deadpool::managed::Object::take(worker);
+            }
+        }
+
+        result
     }
 
     /// Add or update a module in the pool
@@ -62,19 +79,38 @@ impl Pool {
     ) -> Result<(), RuntimeError> {
         let name = name.into();
         let code: ModuleCodeString = code.into();
+        let (runtime_code, module_code) = code.into_cheap_copy();
+
+        let worker = self.get_worker().await?;
+        // Take the worker out so it won't be returned to the pool
+        // This will cause the worker to be dropped and a new one created on next use
+        // So we do not create inconsistent workers.
+        let mut worker = deadpool::managed::Object::take(worker);
+        worker.add_module(name.clone(), runtime_code).await?;
 
         let mut modules = self.manager.modules();
 
         modules.insert(
             name.clone(),
             ModuleDefinition {
-                code: code.as_str().into(),
+                code: module_code.as_str().into(),
             },
         );
 
         self.manager.update_modules(modules);
 
         Ok(())
+    }
+
+    async fn get_worker(&self) -> Result<Object<WorkerManager>, RuntimeError> {
+        self.inner.get().await.map_err(|e| match e {
+            deadpool::managed::PoolError::Backend(err) => match err {
+                // The recycle policy of the poll will prevent this
+                RuntimeError::Dead => unreachable!(),
+                _ => err,
+            },
+            _ => RuntimeError::Unknown(e.to_string()),
+        })
     }
 }
 
@@ -84,7 +120,7 @@ pub struct PoolBuilder {
     max_size: usize,
     domain_permission: Option<DomainPermission>,
     evaluation_timeout: Option<std::time::Duration>,
-    recycle_policy: Option<super::options::RecyclePolicy>,
+    recycle_policy: Option<RecyclePolicy>,
 }
 
 impl PoolBuilder {
@@ -118,7 +154,7 @@ impl PoolBuilder {
     }
 
     /// Set the recycle policy for all workers
-    pub fn with_recycle_policy(mut self, policy: super::options::RecyclePolicy) -> Self {
+    pub fn with_recycle_policy(mut self, policy: RecyclePolicy) -> Self {
         self.recycle_policy = Some(policy);
         self
     }
@@ -1117,24 +1153,19 @@ mod tests {
         let pool = Pool::builder()
             .max_size(1)
             .with_evaluation_timeout(Duration::from_millis(100))
-            .add_module("expensive", expensive_code.to_string())
             .build()
             .unwrap();
 
-        let result: Result<i32, RuntimeError> = pool
-            .exec("expensive", "getValue", (), ExecOptions::new())
+        let result = pool
+            .add_module("expensive", expensive_code.to_string())
             .await;
 
         assert!(result.is_err(), "Module evaluation should timeout");
         assert!(matches!(result.unwrap_err(), RuntimeError::InitTimeout));
 
         // also on adding a module
-        pool.add_module("expensive_2", expensive_code.to_string())
-            .await
-            .unwrap();
-
-        let result: Result<i32, RuntimeError> = pool
-            .exec("expensive_2", "getValue", (), ExecOptions::new())
+        let result = pool
+            .add_module("expensive_2", expensive_code.to_string())
             .await;
 
         assert!(result.is_err(), "Module evaluation should timeout");
@@ -1145,14 +1176,11 @@ mod tests {
             function add(a, b) { return a + b; }
             export default { add };
         "#;
-        pool.add_module("not_expensive", add_code.to_string())
-            .await
-            .unwrap();
-
-        let result: Result<i32, RuntimeError> = pool
-            .exec("not_expensive", "add", (1, 2), ExecOptions::new())
-            .await;
-
-        assert!(result.is_ok(), "Should not error");
+        let result = pool.add_module("not_expensive", add_code.to_string()).await;
+        assert!(
+            result.is_ok(),
+            "Should not error: {:?}",
+            result.unwrap_err()
+        );
     }
 }

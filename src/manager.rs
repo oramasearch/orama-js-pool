@@ -18,7 +18,7 @@ use super::{
 };
 
 /// Definition of a module to be loaded into workers
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ModuleDefinition {
     pub code: Arc<str>,
 }
@@ -29,7 +29,7 @@ pub struct WorkerManager {
     modules: Arc<RwLock<HashMap<String, ModuleDefinition>>>,
     cache: SharedCache,
     version: Arc<AtomicU64>,
-    worker_options: WorkerOptions,
+    pub(crate) worker_options: WorkerOptions,
 }
 
 impl WorkerManager {

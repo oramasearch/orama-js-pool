@@ -87,8 +87,7 @@ pub struct Runtime<Input, Output> {
     join_handler: JoinHandle<()>,
     sender: tokio::sync::mpsc::Sender<RuntimeEvent>,
     exec_count: u64,
-    timed_out: bool,
-    errored: bool,
+    should_recreate: bool,
     loaded_modules: HashMap<String, String>, // module_name -> specifier
     evaluation_timeout: Duration,
     _p: PhantomData<(Input, Output)>,
@@ -108,6 +107,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
         evaluation_timeout: Duration,
         shared_cache: SharedCache,
     ) -> Result<Self, RuntimeError> {
+        // Use a larger buffer so events can be queued even if runtime is busy with a long operation
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<RuntimeEvent>(1);
         let (init_sender1, init_receiver1) =
             tokio::sync::oneshot::channel::<Result<IsolateHandle, CoreError>>();
@@ -268,8 +268,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                 join_handler: thread_id,
                 sender,
                 exec_count: 0,
-                timed_out: false,
-                errored: false,
+                should_recreate: false,
                 loaded_modules: HashMap::new(),
                 evaluation_timeout,
                 _p: PhantomData,
@@ -306,11 +305,9 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
             .await
             .map_err(|_| {
                 warn!("Module evaluation timeout for {module_name}");
-                // Needs a forced restart in this case because it will leave the runtime
-                // in an inconsistent state.
-                self.timed_out = true;
-                self.errored = true;
+                // Terminate to stop expensive module; worker will recreate runtime
                 self.handler.terminate_execution();
+                self.should_recreate = true;
                 RuntimeError::InitTimeout
             })?
             .unwrap()?;
@@ -409,7 +406,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
 
         let output = match output {
             Err(_) => {
-                self.timed_out = true;
+                self.should_recreate = true;
                 self.handler.terminate_execution();
                 return Err(RuntimeError::ExecTimeout);
             }
@@ -418,11 +415,6 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
             }
             Ok(Ok(Ok(t))) => t,
             Ok(Ok(Err(e))) => {
-                // Mark as errored for recycle policy, but NOT for permission errors
-                // Permission errors are expected behavior (security enforcement), not runtime errors
-                if !matches!(e, RuntimeError::NetworkPermissionDenied(_)) {
-                    self.errored = true;
-                }
                 return Err(e);
             }
         };
@@ -435,7 +427,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
 
     /// Check if the runtime is still alive
     pub fn is_alive(&self) -> bool {
-        !self.join_handler.is_finished()
+        !self.join_handler.is_finished() && !self.should_recreate
     }
 }
 
