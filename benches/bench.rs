@@ -17,7 +17,7 @@ fn bench_worker_init(c: &mut Criterion) {
 
     c.bench_function("worker/init", |b| {
         b.to_async(&rt).iter(|| async {
-            let worker = Worker::build()
+            let worker = Worker::builder()
                 .with_evaluation_timeout(Duration::from_secs(5))
                 .with_domain_permission(DomainPermission::AllowAll)
                 .add_module("benchmark", SIMPLE_CODE.to_string())
@@ -35,7 +35,7 @@ fn bench_worker_exec(c: &mut Criterion) {
     c.bench_function("worker/exec", |b| {
         b.iter_custom(|iters| {
             rt.block_on(async {
-                let mut worker = Worker::build()
+                let mut worker = Worker::builder()
                     .with_evaluation_timeout(Duration::from_secs(5))
                     .with_domain_permission(DomainPermission::AllowAll)
                     .add_module("benchmark", SIMPLE_CODE.to_string())

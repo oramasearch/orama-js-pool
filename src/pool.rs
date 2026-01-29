@@ -139,7 +139,6 @@ impl PoolBuilder {
     pub fn build(self) -> Result<Pool, RuntimeError> {
         let cache = SharedCache::new();
 
-        // Construct WorkerOptions from individual fields
         let worker_options = WorkerOptions {
             evaluation_timeout: self.evaluation_timeout.unwrap_or(Duration::from_secs(5)),
             domain_permission: self.domain_permission.unwrap_or_default(),
@@ -986,36 +985,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_recycle_policy_never() {
-        let _ = tracing_subscriber::fmt::try_init();
-
-        let counter_code = r#"
-            let callCount = 0;
-            function incrementCounter() {
-                callCount++;
-                return callCount;
-            }
-            export default { incrementCounter };
-        "#;
-
-        let pool = Pool::builder()
-            .max_size(1)
-            .add_module("counter", counter_code.to_string())
-            .with_recycle_policy(RecyclePolicy::Never)
-            .build()
-            .unwrap();
-
-        // Each call should reuse the same runtime and increment
-        for i in 1..=3 {
-            let result: i32 = pool
-                .exec("counter", "incrementCounter", (), ExecOptions::new())
-                .await
-                .unwrap();
-            assert_eq!(result, i, "Runtime should persist across calls");
-        }
-    }
-
-    #[tokio::test]
     async fn test_recycle_policy_timeout_or_error() {
         let _ = tracing_subscriber::fmt::try_init();
 
@@ -1166,5 +1135,20 @@ mod tests {
 
         assert!(result.is_err(), "Module evaluation should timeout");
         assert!(matches!(result.unwrap_err(), RuntimeError::InitTimeout));
+
+        // not expensive
+        let add_code = r#"
+            function add(a, b) { return a + b; }
+            export default { add };
+        "#;
+        pool.add_module("not_expensive", add_code.to_string())
+            .await
+            .unwrap();
+
+        let result: Result<i32, RuntimeError> = pool
+            .exec("not_expensive", "add", (1, 2), ExecOptions::new())
+            .await;
+
+        assert!(result.is_ok(), "Should not error");
     }
 }

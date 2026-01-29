@@ -50,7 +50,7 @@ impl Worker {
         }
     }
 
-    pub fn build() -> WorkerBuilder {
+    pub fn builder() -> WorkerBuilder {
         WorkerBuilder::default()
     }
 
@@ -60,47 +60,17 @@ impl Worker {
         Code: Into<ModuleCodeString> + Send + 'static,
     {
         let code_string: ModuleCodeString = code.into();
+        let (runtime_code, module_code) = code_string.into_cheap_copy();
+
+        let runtime = self.get_runtime().await?;
+        runtime.load_module(name.clone(), runtime_code).await?;
 
         self.modules.insert(
             name.clone(),
             ModuleInfo {
-                code: code_string.as_str().into(),
+                code: module_code.as_str().into(),
             },
         );
-
-        if self.runtime.is_none() {
-            let runtime = Runtime::<serde_json::Value, serde_json::Value>::new(
-                self.domain_permission.clone(),
-                self.evaluation_timeout,
-                self.cache.clone(),
-                self.recycle_policy,
-            )
-            .await?;
-            self.runtime = Some(runtime);
-        }
-
-        if let Some(runtime) = &mut self.runtime {
-            runtime.load_module(name.clone(), code_string).await?;
-        }
-
-        Ok(())
-    }
-
-    /// Rebuild the runtime with all currently registered modules
-    async fn rebuild_runtime(&mut self) -> Result<(), RuntimeError> {
-        let mut runtime = Runtime::<serde_json::Value, serde_json::Value>::new(
-            self.domain_permission.clone(),
-            self.evaluation_timeout,
-            self.cache.clone(),
-            self.recycle_policy,
-        )
-        .await?;
-
-        for (name, info) in &self.modules {
-            runtime.load_module(name.clone(), info.code.clone()).await?;
-        }
-
-        self.runtime = Some(runtime);
 
         Ok(())
     }
@@ -121,15 +91,11 @@ impl Worker {
             return Err(RuntimeError::MissingModule(module_name.to_string()));
         }
 
-        // Check if runtime is alive, recreate if needed
-        let runtime = match &mut self.runtime {
-            Some(rt) if rt.is_alive() => rt,
-            _ => {
-                warn!("Runtime not alive or missing, rebuilding...");
-                self.rebuild_runtime().await?;
-                self.runtime.as_mut().unwrap()
-            }
-        };
+        let domain_permission = exec_options
+            .domain_permission
+            .unwrap_or_else(|| self.domain_permission.clone());
+
+        let runtime = self.get_runtime().await?;
 
         runtime
             .check_function(module_name, function_name.to_string())
@@ -137,11 +103,6 @@ impl Worker {
 
         let params_tuple = params.try_into_function_parameter()?;
         let params_value = serde_json::to_value(params_tuple.0)?;
-
-        // Use exec_options domain_permission if specified, otherwise use worker default
-        let domain_permission = exec_options
-            .domain_permission
-            .unwrap_or_else(|| self.domain_permission.clone());
 
         let result: serde_json::Value = runtime
             .exec(
@@ -156,6 +117,39 @@ impl Worker {
 
         let output: Output = serde_json::from_value(result)?;
         Ok(output)
+    }
+
+    // Checks if the runtime is healthy otherwise it recreate it.
+    async fn get_runtime(
+        &mut self,
+    ) -> Result<&mut Runtime<serde_json::Value, serde_json::Value>, RuntimeError> {
+        let needs_rebuild = !matches!(&self.runtime, Some(rt) if rt.is_alive());
+
+        if needs_rebuild {
+            warn!("Runtime not alive or missing, rebuilding...");
+            self.rebuild_runtime().await?;
+        }
+
+        Ok(self.runtime.as_mut().unwrap())
+    }
+
+    /// Rebuild the runtime with all currently registered modules
+    async fn rebuild_runtime(&mut self) -> Result<(), RuntimeError> {
+        let mut runtime = Runtime::<serde_json::Value, serde_json::Value>::new(
+            self.domain_permission.clone(),
+            self.evaluation_timeout,
+            self.cache.clone(),
+            self.recycle_policy,
+        )
+        .await?;
+
+        for (name, info) in &self.modules {
+            runtime.load_module(name.clone(), info.code.clone()).await?;
+        }
+
+        self.runtime = Some(runtime);
+
+        Ok(())
     }
 
     /// Check if the worker is alive
@@ -267,5 +261,59 @@ impl WorkerBuilder {
 impl Default for WorkerBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_module_evaluation_timeout() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let expensive_code = r#"
+            await new Promise(resolve => setTimeout(resolve, 10000));
+            function getValue() {
+                return 42;
+            }
+            export default { getValue };
+        "#;
+
+        let not_expensive_code = r#"
+            function add(a, b) { return a + b; }
+            export default { add };
+        "#;
+
+        let result = Worker::builder()
+            .with_evaluation_timeout(Duration::from_millis(100))
+            .add_module("expensive", expensive_code.to_string())
+            .build()
+            .await;
+
+        assert!(result.is_err(), "Module evaluation should timeout");
+        assert!(matches!(result, Err(RuntimeError::InitTimeout)));
+
+        let mut worker = Worker::builder()
+            .with_evaluation_timeout(Duration::from_millis(100))
+            .add_module("not_expensive", not_expensive_code.to_string())
+            .build()
+            .await
+            .unwrap();
+
+        // also on adding a module
+        let result = worker
+            .add_module("expensive".into(), expensive_code.to_string())
+            .await;
+
+        assert!(result.is_err(), "Module evaluation should timeout");
+        assert!(matches!(result, Err(RuntimeError::InitTimeout)));
+
+        worker
+            .add_module("not_expensive_2".into(), not_expensive_code.to_string())
+            .await
+            .unwrap();
     }
 }

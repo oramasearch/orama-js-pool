@@ -8,8 +8,6 @@ pub use crate::permission::DomainPermission;
 /// Policy for when to recycle/invalidate a runtime
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RecyclePolicy {
-    /// Never recycle runtime (reuse until timeout/crash)
-    Never,
     /// Recycle on timeout only (current default behavior)
     OnTimeout,
     /// Recycle on any error

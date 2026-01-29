@@ -307,6 +307,10 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
             .await
             .map_err(|_| {
                 warn!("Module evaluation timeout for {module_name}");
+                // Needs a forced restart in this case because it will leave the runtime
+                // in an inconsistent state.
+                self.timed_out = true;
+                self.errored = true;
                 self.handler.terminate_execution();
                 RuntimeError::InitTimeout
             })?
@@ -432,15 +436,12 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
 
     /// Check if the runtime is still alive based on recycle policy
     pub fn is_alive(&self) -> bool {
-        use super::options::RecyclePolicy;
-
         if self.join_handler.is_finished() {
             return false;
         }
 
         // Apply recycle policy
         match self.recycle_policy {
-            RecyclePolicy::Never => true,
             RecyclePolicy::OnTimeout => !self.timed_out,
             RecyclePolicy::OnError => !self.errored,
             RecyclePolicy::OnTimeoutOrError => !(self.timed_out || self.errored),
