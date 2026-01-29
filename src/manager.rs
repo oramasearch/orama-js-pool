@@ -87,8 +87,7 @@ impl Manager for WorkerManager {
                 .with_cache(cache)
                 .with_version(version)
                 .with_domain_permission(worker_options.domain_permission)
-                .with_evaluation_timeout(worker_options.evaluation_timeout)
-                .with_recycle_policy(worker_options.recycle_policy);
+                .with_evaluation_timeout(worker_options.evaluation_timeout);
 
             for (name, def) in modules {
                 builder = builder.add_module(name, def.code);

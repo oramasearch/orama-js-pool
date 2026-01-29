@@ -41,7 +41,11 @@ impl Pool {
         Output: DeserializeOwned + Send + 'static,
     {
         let mut worker = self.inner.get().await.map_err(|e| match e {
-            deadpool::managed::PoolError::Backend(err) => err,
+            deadpool::managed::PoolError::Backend(err) => match err {
+                // The recycle policy of the poll will prevent this
+                RuntimeError::Dead => unreachable!(),
+                _ => RuntimeError::Unknown(err.to_string()),
+            },
             _ => RuntimeError::Unknown(e.to_string()),
         })?;
 

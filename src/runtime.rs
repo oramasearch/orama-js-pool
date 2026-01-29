@@ -12,7 +12,7 @@ use tracing::{debug, warn};
 use crate::{
     orama_extension::{ChannelStorage, OutputChannel, SharedCache, StdoutHandler, StdoutHandlerFn},
     permission::CustomPermissions,
-    DomainPermission, RecyclePolicy,
+    DomainPermission,
 };
 
 use super::parameters::TryIntoFunctionParameters;
@@ -50,6 +50,8 @@ pub enum RuntimeError {
     ParameterError(#[from] serde_json::Error),
     #[error("Compilation error: {0}")]
     CompilationError(Box<deno_core::error::JsError>),
+    #[error("The runtime is dead")]
+    Dead,
     #[error("Unknown error: {0}")]
     Unknown(String),
 }
@@ -87,7 +89,6 @@ pub struct Runtime<Input, Output> {
     exec_count: u64,
     timed_out: bool,
     errored: bool,
-    recycle_policy: RecyclePolicy,
     loaded_modules: HashMap<String, String>, // module_name -> specifier
     evaluation_timeout: Duration,
     _p: PhantomData<(Input, Output)>,
@@ -106,7 +107,6 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
         domain_permission: DomainPermission,
         evaluation_timeout: Duration,
         shared_cache: SharedCache,
-        recycle_policy: RecyclePolicy,
     ) -> Result<Self, RuntimeError> {
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<RuntimeEvent>(1);
         let (init_sender1, init_receiver1) =
@@ -270,7 +270,6 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                 exec_count: 0,
                 timed_out: false,
                 errored: false,
-                recycle_policy,
                 loaded_modules: HashMap::new(),
                 evaluation_timeout,
                 _p: PhantomData,
@@ -285,7 +284,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
         code: Code,
     ) -> Result<(), RuntimeError> {
         if !self.is_alive() {
-            return Err(RuntimeError::InitTimeout);
+            return Err(RuntimeError::Dead);
         }
 
         let code: ModuleCodeString = code.into();
@@ -328,7 +327,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
         function_name: String,
     ) -> Result<(), RuntimeError> {
         if !self.is_alive() {
-            return Err(RuntimeError::InitTimeout);
+            return Err(RuntimeError::Dead);
         }
 
         let module_specifier = self
@@ -374,7 +373,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
         timeout: Duration,
     ) -> Result<Output, RuntimeError> {
         if !self.is_alive() {
-            return Err(RuntimeError::InitTimeout);
+            return Err(RuntimeError::Dead);
         }
 
         let module_specifier = self
@@ -434,18 +433,9 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
         Ok(output)
     }
 
-    /// Check if the runtime is still alive based on recycle policy
+    /// Check if the runtime is still alive
     pub fn is_alive(&self) -> bool {
-        if self.join_handler.is_finished() {
-            return false;
-        }
-
-        // Apply recycle policy
-        match self.recycle_policy {
-            RecyclePolicy::OnTimeout => !self.timed_out,
-            RecyclePolicy::OnError => !self.errored,
-            RecyclePolicy::OnTimeoutOrError => !(self.timed_out || self.errored),
-        }
+        !self.join_handler.is_finished()
     }
 }
 
