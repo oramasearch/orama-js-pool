@@ -1,4 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 
 use orama_js_pool::{DomainPermission, ExecOptions, Pool, Worker};
 use std::time::Duration;
