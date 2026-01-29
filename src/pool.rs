@@ -13,6 +13,10 @@ use super::{
     runtime::RuntimeError,
 };
 
+/// A pool of JavaScript workers that can execute functions from loaded modules.
+///
+/// Pool is `Clone`, `Send`, and `Sync`, making it safe to share across threads
+/// and async tasks. Cloning is cheap as it only clones Arc pointers internally.
 #[derive(Clone)]
 pub struct Pool {
     inner: deadpool::managed::Pool<WorkerManager>,
@@ -71,7 +75,7 @@ impl Pool {
     }
 }
 
-/// Builder for creating a Pool
+/// Builder for creating a Pool.
 pub struct PoolBuilder {
     modules: HashMap<String, ModuleDefinition>,
     max_size: usize,
