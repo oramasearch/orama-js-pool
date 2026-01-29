@@ -46,12 +46,10 @@ pub enum RuntimeError {
     ExecTimeout,
     #[error("Network permission denied: {0}")]
     NetworkPermissionDenied(String),
-    #[error("Serde error: {0}")]
-    SerdeError(#[from] serde_json::Error),
+    #[error("Parameter error: {0}")]
+    ParameterError(#[from] serde_json::Error),
     #[error("Compilation error: {0}")]
     CompilationError(Box<deno_core::error::JsError>),
-    // #[error("Parameter error: {0}")]
-    // ParameterError(#[from] JSRunnerError),
     #[error("Unknown error: {0}")]
     Unknown(String),
 }
@@ -386,7 +384,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
 
         let params = params.try_into_function_parameter()?;
         let params = params.0;
-        let input_params = serde_json::to_string(&params).map_err(RuntimeError::SerdeError)?;
+        let input_params = serde_json::to_string(&params).map_err(RuntimeError::ParameterError)?;
 
         let (sender, receiver) =
             tokio::sync::oneshot::channel::<Result<serde_json::Value, RuntimeError>>();
@@ -426,7 +424,8 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
             }
         };
 
-        let output: Output = serde_json::from_value(output).map_err(RuntimeError::SerdeError)?;
+        let output: Output =
+            serde_json::from_value(output).map_err(RuntimeError::ParameterError)?;
 
         Ok(output)
     }
