@@ -9,7 +9,7 @@ Orama JS Pool provides a pool of JavaScript engines (using the Deno runtime via 
 Here's how to run an async JavaScript function using a pool of JS engines:
 
 ```rust
-use orama_js_pool::{ExecOption, JSPoolExecutor, JSRunnerError};
+use orama_js_pool::{ExecOptions, Pool, RuntimeError};
 use std::time::Duration;
 
 static CODE_ASYNC_SUM: &str = r#"
@@ -21,31 +21,26 @@ export default { async_sum };
 "#;
 
 #[tokio::main]
-async fn main() -> Result<(), JSRunnerError> {
-    // Create a pool with 10 JS engines, running the code above
-    let pool = JSPoolExecutor::<Vec<u8>, u8>::new(
-        CODE_ASYNC_SUM.to_string(),
-        10,                         // number of engines
-        None,                       // no http domain restriction on startup
-        Duration::from_millis(200), // startup timeout
-        true,                       // is_async
-        "async_sum".to_string(),    // function name to call
-    )
-    .await?;
+async fn main() -> Result<(), RuntimeError> {
+    // Create a pool with 10 JS workers, with the module loaded
+    let pool = Pool::builder()
+        .max_size(10) // number of workers in the pool
+        .with_evaluation_timeout(Duration::from_millis(200)) // module load timeout
+        .add_module("async_calculator", CODE_ASYNC_SUM.to_string())
+        .build()
+        .await?;
 
     let params = vec![1, 2];
-    let result = pool
+    let result: u8 = pool
         .exec(
-            params, // input parameter
-            None,   // no stdout stream (set to Some(...) to capture stdout/stderr)
-            ExecOption {
-                timeout: Duration::from_millis(200), // timeout
-                allowed_hosts: None,
-            },
+            "async_calculator", // module name
+            "async_sum",        // function name
+            params,             // input parameters
+            ExecOptions::new().with_timeout(Duration::from_millis(200)),
         )
         .await?;
 
-    println!("async_sum(1, 2) == {}", result);
+    println!("async_sum(1, 2) == {result}");
     assert_eq!(result, 3);
     Ok(())
 }
@@ -54,23 +49,31 @@ async fn main() -> Result<(), JSRunnerError> {
 
 ## API Overview
 
-### `JSPoolExecutor`
-The main entry point. Manages a pool of JS engines for a given code string. Supports both sync and async JS functions.
-- `JSPoolExecutor::<Input, Output>::new(code, pool_size, allowed_hosts, startup_timeout, is_async, function_name)`
-- `exec(params, stdout_stream, ExecOption)` — runs the function with the given parameters. The second parameter is an optional stream to receive stdout/stderr output from the JS function.
+### `Pool`
 
-**Stdout/Stderr Handling:**
-You can capture JavaScript `console.log` and `console.error` output by providing a stream (such as a broadcast channel sender) to the `stdout_stream` parameter of the `exec` method. This allows you to handle or redirect JS stdout/stderr as it is produced during execution. See `stream_console` example.
+Main entry point. Manages a pool of JS workers, each with loaded modules.
 
-### `ExecOption`
+- `Pool::builder()` — creates a new pool builder
+- `PoolBuilder::max_size(n)` — sets worker pool size
+- `PoolBuilder::with_evaluation_timeout(duration)` — module load timeout
+- `PoolBuilder::with_max_executions(limit)` — recycle workers after n executions (prevents memory leaks)
+- `PoolBuilder::add_module(name, code)` — loads a module into all workers
+- `exec(module_name, function_name, params, ExecOptions)` — executes a function
+
+### `ExecOptions`
+
 Per-execution configuration:
-- `timeout`: Maximum execution time per call
-- `allowed_hosts`: Restrict HTTP access for the JS code (optional)
 
-### `JSRunnerError`
-All errors (startup, execution, JS exceptions) are reported as `JSRunnerError`.
+- `with_timeout(duration)`: Maximum execution time
+- `with_allowed_hosts(hosts)`: Restrict HTTP access
+- `with_stdout_stream(sender)`: Capture console.log/error output
+
+### `RuntimeError`
+
+All errors (startup, execution, JS exceptions) are reported as `RuntimeError`.
 
 ## Features
+
 - **Parallel execution**: Multiple requests handled concurrently
 - **Async and sync JS support**: Run both types of JS functions
 - **Sandboxing**: Restrict network access via `allowed_hosts`
@@ -78,6 +81,7 @@ All errors (startup, execution, JS exceptions) are reported as `JSRunnerError`.
 - **Typed input/output**: Use Rust types for parameters and results (via serde)
 
 ## Example: Streaming (if supported)
+
 If your JS function is an async generator, you can use streaming APIs (see crate docs for details).
 
 ## License

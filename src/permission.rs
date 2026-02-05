@@ -6,8 +6,19 @@ use deno_web::TimersPermission;
 
 pub const DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING: &str = "Domain not allowed";
 
+/// Domain permission policy for network access
+#[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
+pub enum DomainPermission {
+    #[default]
+    DenyAll,
+    AllowAll,
+    Allow(Vec<String>),
+    Deny(Vec<String>),
+}
+
 pub struct CustomPermissions {
-    pub allowed_hosts: Option<Vec<String>>,
+    pub domain_permission: DomainPermission,
 }
 
 impl TimersPermission for CustomPermissions {
@@ -75,29 +86,59 @@ impl FetchPermissions for CustomPermissions {
         url: &deno_core::url::Url,
         _api_name: &str,
     ) -> Result<(), deno_permissions::PermissionCheckError> {
-        let domain_with_port: Option<(String, &Vec<String>)> =
-            match (url.domain(), url.port(), self.allowed_hosts.as_ref()) {
-                (Some(domain), Some(port), Some(l)) => Some((format!("{domain}:{port}"), l)),
-                (Some(domain), None, Some(l)) => Some((domain.to_string(), l)),
-                (_, _, None) => return Ok(()),
-                _ => None,
-            };
+        // Extract domain (with port if present)
+        let domain = match (url.domain(), url.port()) {
+            (Some(domain), Some(port)) => format!("{domain}:{port}"),
+            (Some(domain), None) => domain.to_string(),
+            _ => {
+                return Err(deno_permissions::PermissionCheckError::PermissionDenied(
+                    PermissionDeniedError::Fatal {
+                        access: format!(
+                            "{DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING}: Invalid URL {url}"
+                        ),
+                    },
+                ))
+            }
+        };
 
-        if let Some((domain, list)) = domain_with_port {
-            let is_allowed = list.contains(&domain);
-            if is_allowed {
-                return Ok(());
+        match &self.domain_permission {
+            DomainPermission::AllowAll => Ok(()),
+            DomainPermission::DenyAll => {
+                Err(deno_permissions::PermissionCheckError::PermissionDenied(
+                    PermissionDeniedError::Fatal {
+                        access: format!(
+                            "{DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING}: {url}. All network access is denied"
+                        ),
+                    },
+                ))
+            }
+            DomainPermission::Allow(allowed_list) => {
+                if allowed_list.contains(&domain) {
+                    Ok(())
+                } else {
+                    Err(deno_permissions::PermissionCheckError::PermissionDenied(
+                        PermissionDeniedError::Fatal {
+                            access: format!(
+                                "{DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING}: {url}. Allowed domains: {allowed_list:?}"
+                            ),
+                        },
+                    ))
+                }
+            }
+            DomainPermission::Deny(denied_list) => {
+                if denied_list.contains(&domain) {
+                    Err(deno_permissions::PermissionCheckError::PermissionDenied(
+                        PermissionDeniedError::Fatal {
+                            access: format!(
+                                "{DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING}: {url}. Domain is in deny list: {denied_list:?}"
+                            ),
+                        },
+                    ))
+                } else {
+                    Ok(())
+                }
             }
         }
-
-        Err(deno_permissions::PermissionCheckError::PermissionDenied(
-            PermissionDeniedError::Fatal {
-                access: format!(
-                    "{}: {}. Allowed {:?}",
-                    DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING, url, self.allowed_hosts
-                ),
-            },
-        ))
     }
 
     // Used for file:// URLs

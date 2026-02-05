@@ -1,14 +1,18 @@
 #![doc = include_str!("../README.md")]
 
-mod executor;
+mod manager;
+mod options;
 mod orama_extension;
 mod parameters;
 mod permission;
 mod pool;
-mod runner;
+mod runtime;
+mod worker;
 
-pub use executor::*;
-pub use orama_extension::OutputChannel;
-pub use parameters::*;
-pub use pool::{JSPoolExecutor, JSPoolExecutorConfig};
-pub use runner::{ExecOption, JSRunnerError};
+pub use manager::{ModuleDefinition, WorkerManager};
+pub use options::{DomainPermission, ExecOptions, MaxExecutions, RecyclePolicy, WorkerOptions};
+pub use orama_extension::{OutputChannel, SharedCache};
+pub use parameters::{FunctionParameters, TryIntoFunctionParameters};
+pub use pool::{Pool, PoolBuilder};
+pub use runtime::{ModuleName, Runtime, RuntimeError};
+pub use worker::{Worker, WorkerBuilder};

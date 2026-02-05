@@ -1,4 +1,4 @@
-use orama_js_pool::{ExecOption, JSPoolExecutor, JSRunnerError, OutputChannel};
+use orama_js_pool::{ExecOptions, OutputChannel, Pool, RuntimeError};
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,16 +14,13 @@ export default { log_and_error };
 "#;
 
 #[tokio::main]
-async fn main() -> Result<(), JSRunnerError> {
-    let pool = JSPoolExecutor::<serde_json::Value, usize>::new(
-        CODE_LOG.to_string(),
-        2,    // 2 executors
-        None, // no http domain restriction
-        Duration::from_millis(200),
-        false, // not async
-        "log_and_error".to_string(),
-    )
-    .await?;
+async fn main() -> Result<(), RuntimeError> {
+    let pool = Pool::builder()
+        .max_size(2) // 2 workers in the pool
+        .with_evaluation_timeout(Duration::from_millis(200))
+        .add_module("logger", CODE_LOG.to_string())
+        .build()
+        .await?;
 
     let (sender, mut receiver) = broadcast::channel::<(OutputChannel, String)>(16);
     let input = json!({
@@ -35,24 +32,24 @@ async fn main() -> Result<(), JSRunnerError> {
     let print_task = tokio::spawn(async move {
         while let Ok((channel, msg)) = receiver.recv().await {
             match channel {
-                OutputChannel::StdOut => print!("[JS stdout] {}", msg),
-                OutputChannel::StdErr => eprint!("[JS stderr] {}", msg),
+                OutputChannel::StdOut => print!("[JS stdout] {msg}"),
+                OutputChannel::StdErr => eprint!("[JS stderr] {msg}"),
             }
         }
     });
 
-    let result = pool
+    let result: usize = pool
         .exec(
+            "logger",        // module name
+            "log_and_error", // function name
             input.clone(),
-            Some(Arc::new(sender)),
-            ExecOption {
-                timeout: Duration::from_millis(500),
-                allowed_hosts: None,
-            },
+            ExecOptions::new()
+                .with_timeout(Duration::from_millis(500))
+                .with_stdout_sender(Arc::new(sender)),
         )
         .await?;
 
-    println!("Returned value: {}", result);
+    println!("Returned value: {result}");
     // Give the print task a moment to flush output
     tokio::time::sleep(Duration::from_millis(100)).await;
     drop(print_task); // End the print task

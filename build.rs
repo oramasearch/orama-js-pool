@@ -8,7 +8,7 @@ mod orama_extension;
 #[path = "src/permission.rs"]
 mod permission;
 
-deno_core::extension!(deno_telemetry, esm = ["telemetry.ts", "util.ts"],);
+deno_core::extension!(deno_telemetry, esm = ["telemetry.ts", "util.ts"]);
 
 fn main() {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
@@ -34,16 +34,18 @@ fn main() {
                 deno_fetch::deno_fetch::init_ops_and_esm::<permission::CustomPermissions>(
                     deno_fetch::Options::default(),
                 ),
+                deno_crypto::deno_crypto::init_ops_and_esm(None), // deno_crypto
                 orama_extension::orama_extension::init_ops_and_esm(
                     permission::CustomPermissions {
                         // During the snapshot build, no permissions are allowed
                         // NB: snapshot doesn't store the permissions, so this is just a dummy value
-                        allowed_hosts: Some(vec![]),
+                        domain_permission: permission::DomainPermission::DenyAll,
                     },
                     orama_extension::ChannelStorage::<serde_json::Value> {
                         stream_handler: None,
                     },
                     orama_extension::StdoutHandler(None),
+                    orama_extension::SharedCache::new(),
                 ),
             ],
             with_runtime_cb: None,

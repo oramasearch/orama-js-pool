@@ -23,9 +23,10 @@ name         = "orama_js_pool"
 # crate-type   = ["rlib", "cdylib"]
 
 [dependencies]
-async-channel = "2.3.1"
+deadpool = "0.12"
 deno_console = "0.194.0"
 deno_core = "0.340.0"
+deno_crypto = "0.208.0"
 deno_fetch = "0.218.0"
 deno_io = "0.104.0"
 deno_net = "0.186.0"
@@ -35,7 +36,6 @@ deno_web = "0.225.0"
 deno_webidl = "0.194.0"
 serde = "1"
 serde_json = "1"
-sha2 = "0.10.8"
 thiserror = "2.0.12"
 tokio = { version = "1", features = ["time", "rt"] }
 tracing = "0.1"
@@ -43,6 +43,7 @@ tracing = "0.1"
 [build-dependencies]
 deno_console = "0.194.0"
 deno_core = "0.340.0"
+deno_crypto = "0.208.0"
 deno_fetch = "0.218.0"
 deno_io = "0.104.0"
 deno_net = "0.186.0"
@@ -58,5 +59,10 @@ tracing = "0.1"
 
 [dev-dependencies]
 axum = "0.8.4"
+criterion = { version = "0.8", features = ["async_tokio"] }
 serde = { version = "1", features = ["derive"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+[[bench]]
+name = "bench"
+harness = false

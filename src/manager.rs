@@ -1,0 +1,138 @@
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, RwLock,
+    },
+};
+
+use deadpool::managed::{Manager, Metrics, RecycleError, RecycleResult};
+use std::future::Future;
+
+use crate::orama_extension::SharedCache;
+
+use super::{
+    options::WorkerOptions,
+    runtime::RuntimeError,
+    worker::{Worker, WorkerBuilder},
+};
+
+/// Definition of a module to be loaded into workers
+#[derive(Clone, Debug)]
+pub struct ModuleDefinition {
+    pub code: Arc<str>,
+}
+
+/// Manager for creating and recycling Workers in the pool
+#[derive(Clone)]
+pub struct WorkerManager {
+    modules: Arc<RwLock<HashMap<String, ModuleDefinition>>>,
+    version: Arc<AtomicU64>,
+    cache: SharedCache,
+    pub(crate) worker_options: WorkerOptions,
+}
+
+impl WorkerManager {
+    pub fn new(
+        modules: HashMap<String, ModuleDefinition>,
+        cache: SharedCache,
+        worker_options: WorkerOptions,
+    ) -> Self {
+        Self {
+            modules: Arc::new(RwLock::new(modules)),
+            version: Arc::new(AtomicU64::new(1)),
+            cache,
+            worker_options,
+        }
+    }
+
+    pub fn update_modules(&self, modules: HashMap<String, ModuleDefinition>) {
+        let mut modules_guard = self
+            .modules
+            .write()
+            .expect("Failed to acquire write lock on modules");
+        *modules_guard = modules;
+        drop(modules_guard);
+
+        // Increment version to invalidate old workers
+        self.version.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Get a clone of current modules
+    pub fn modules(&self) -> HashMap<String, ModuleDefinition> {
+        self.modules
+            .read()
+            .expect("Failed to acquire read lock on modules")
+            .clone()
+    }
+
+    /// Get current version
+    pub fn current_version(&self) -> u64 {
+        self.version.load(Ordering::SeqCst)
+    }
+
+    /// Get shared cache
+    pub fn cache(&self) -> &SharedCache {
+        &self.cache
+    }
+}
+
+impl Manager for WorkerManager {
+    type Type = Worker;
+    type Error = RuntimeError;
+
+    /// Create a new worker with current module definitions
+    fn create(&self) -> impl Future<Output = Result<Self::Type, Self::Error>> + Send {
+        let modules = self
+            .modules
+            .read()
+            .expect("Failed to acquire read lock on modules")
+            .clone();
+        let cache = self.cache.clone();
+        let worker_options = self.worker_options.clone();
+        let version = self.current_version();
+
+        async move {
+            let mut builder = WorkerBuilder::new()
+                .with_cache(cache)
+                .with_domain_permission(worker_options.domain_permission)
+                .with_evaluation_timeout(worker_options.evaluation_timeout)
+                .with_max_executions(worker_options.max_executions)
+                .with_version(version);
+
+            for (name, def) in modules {
+                builder = builder.add_module(name, def.code);
+            }
+
+            let worker = builder.build().await?;
+
+            Ok(worker)
+        }
+    }
+
+    /// Check if a worker is still healthy and has the correct version
+    async fn recycle(
+        &self,
+        worker: &mut Self::Type,
+        _metrics: &Metrics,
+    ) -> RecycleResult<Self::Error> {
+        if !worker.is_alive() {
+            return Err(RecycleError::Message("Worker not alive".into()));
+        }
+
+        // Check if worker version matches current version
+        let current_version = self.current_version();
+        if worker.version() != current_version {
+            return Err(RecycleError::Message(
+                format!(
+                    "Worker version mismatch: worker={}, current={}",
+                    worker.version(),
+                    current_version
+                )
+                .into(),
+            ));
+        }
+
+        Ok(())
+    }
+}
