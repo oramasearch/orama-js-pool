@@ -56,6 +56,7 @@ Main entry point. Manages a pool of JS workers, each with loaded modules.
 - `Pool::builder()` — creates a new pool builder
 - `PoolBuilder::max_size(n)` — sets worker pool size
 - `PoolBuilder::with_evaluation_timeout(duration)` — module load timeout
+- `PoolBuilder::with_max_executions(limit)` — recycle workers after n executions (prevents memory leaks)
 - `PoolBuilder::add_module(name, code)` — loads a module into all workers
 - `exec(module_name, function_name, params, ExecOptions)` — executes a function
 

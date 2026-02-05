@@ -9,7 +9,7 @@ use crate::{orama_extension::SharedCache, RecyclePolicy};
 
 use super::{
     manager::{ModuleDefinition, WorkerManager},
-    options::{DomainPermission, ExecOptions, WorkerOptions},
+    options::{DomainPermission, ExecOptions, MaxExecutions, WorkerOptions},
     parameters::TryIntoFunctionParameters,
     runtime::RuntimeError,
     worker::WorkerBuilder,
@@ -138,7 +138,7 @@ pub struct PoolBuilder {
     domain_permission: Option<DomainPermission>,
     evaluation_timeout: Option<std::time::Duration>,
     recycle_policy: Option<RecyclePolicy>,
-    max_executions: Option<u64>,
+    max_executions: Option<MaxExecutions>,
 }
 
 impl PoolBuilder {
@@ -150,7 +150,7 @@ impl PoolBuilder {
             domain_permission: None,
             evaluation_timeout: None,
             recycle_policy: None,
-            max_executions: Some(100),
+            max_executions: None,
         }
     }
 
@@ -178,9 +178,8 @@ impl PoolBuilder {
         self
     }
 
-    /// Set the maximum number of executions before recycling the runtime
-    /// to prevent memory leaks from accumulated module cache.
-    pub fn with_max_executions(mut self, max: u64) -> Self {
+    /// Set the maximum number of executions before recycling workers in the pool.
+    pub fn with_max_executions(mut self, max: MaxExecutions) -> Self {
         self.max_executions = Some(max);
         self
     }
@@ -209,7 +208,7 @@ impl PoolBuilder {
             evaluation_timeout: self.evaluation_timeout.unwrap_or(Duration::from_secs(5)),
             domain_permission: self.domain_permission.unwrap_or_default(),
             recycle_policy: self.recycle_policy.unwrap_or_default(),
-            max_executions: self.max_executions,
+            max_executions: self.max_executions.unwrap_or_default(),
         };
 
         // Validate that all modules can be loaded within the evaluation timeout
@@ -1467,5 +1466,58 @@ mod tests {
             result.unwrap_err(),
             RuntimeError::MissingModule(name) if name == "nonexistent"
         ));
+    }
+
+    #[tokio::test]
+    async fn test_pool_max_executions() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let counter_code = r#"
+            let callCount = 0;
+            function increment() {
+                callCount++;
+                return callCount;
+            }
+            export default { increment };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(1)
+            .add_module("counter", counter_code.to_string())
+            .with_max_executions(MaxExecutions::Limited(2))
+            .build()
+            .await
+            .unwrap();
+
+        // First 3 executions should increment the counter
+        let result1: i32 = pool
+            .exec("counter", "increment", (), ExecOptions::new())
+            .await
+            .unwrap();
+        assert_eq!(result1, 1);
+
+        let result2: i32 = pool
+            .exec("counter", "increment", (), ExecOptions::new())
+            .await
+            .unwrap();
+        assert_eq!(result2, 2);
+
+        // After 2 executions, the worker should be recycled
+        // and the counter should reset to 1
+        let result4: i32 = pool
+            .exec("counter", "increment", (), ExecOptions::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            result4, 1,
+            "Counter should reset after max_executions is reached"
+        );
+
+        // Verify it continues to work correctly after recycling
+        let result5: i32 = pool
+            .exec("counter", "increment", (), ExecOptions::new())
+            .await
+            .unwrap();
+        assert_eq!(result5, 2);
     }
 }

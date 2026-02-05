@@ -8,7 +8,7 @@ use crate::orama_extension::SharedCache;
 use crate::runtime::ModuleName;
 
 use super::{
-    options::{DomainPermission, ExecOptions},
+    options::{DomainPermission, ExecOptions, MaxExecutions},
     parameters::TryIntoFunctionParameters,
     runtime::{Runtime, RuntimeError},
 };
@@ -27,7 +27,7 @@ pub struct Worker {
     cache: SharedCache,
     domain_permission: DomainPermission,
     evaluation_timeout: std::time::Duration,
-    max_executions: Option<u64>,
+    max_executions: MaxExecutions,
     execution_count: u64,
     version: u64,
 }
@@ -38,7 +38,7 @@ impl Worker {
         cache: SharedCache,
         domain_permission: DomainPermission,
         evaluation_timeout: std::time::Duration,
-        max_executions: Option<u64>,
+        max_executions: MaxExecutions,
         version: u64,
     ) -> Self {
         Self {
@@ -121,15 +121,10 @@ impl Worker {
         }
 
         // Check if we need to invalidate the runtime due to execution limit
-        if let Some(max_executions) = self.max_executions {
-            if self.execution_count >= max_executions {
-                warn!(
-                    "Worker reached max executions limit ({}), invalidating runtime",
-                    max_executions
-                );
-                self.runtime = None;
-                self.execution_count = 0;
-            }
+        if self.max_executions.is_exceeded(self.execution_count) {
+            warn!("Worker reached max executions limit, invalidating runtime");
+            self.runtime = None;
+            self.execution_count = 0;
         }
 
         let domain_permission = exec_options
@@ -208,7 +203,7 @@ pub struct WorkerBuilder {
     cache: Option<SharedCache>,
     domain_permission: Option<DomainPermission>,
     evaluation_timeout: Option<std::time::Duration>,
-    max_executions: Option<u64>,
+    max_executions: MaxExecutions,
     version: u64,
 }
 
@@ -220,7 +215,7 @@ impl WorkerBuilder {
             cache: None,
             domain_permission: None,
             evaluation_timeout: None,
-            max_executions: None,
+            max_executions: MaxExecutions::default(),
             version: 0,
         }
     }
@@ -254,10 +249,9 @@ impl WorkerBuilder {
         self
     }
 
-    /// Set the maximum number of executions before recycling the runtime
-    /// to prevent memory leaks from accumulated module cache.
-    pub fn with_max_executions(mut self, max: u64) -> Self {
-        self.max_executions = Some(max);
+    /// Set the maximum number of executions before recycling the runtime.
+    pub fn with_max_executions(mut self, max: MaxExecutions) -> Self {
+        self.max_executions = max;
         self
     }
 
@@ -440,7 +434,7 @@ mod tests {
 
         let mut worker = Worker::builder()
             .add_module("counter", counter_code.to_string())
-            .with_max_executions(3)
+            .with_max_executions(MaxExecutions::Limited(3))
             .build()
             .await
             .unwrap();

@@ -5,6 +5,33 @@ use crate::OutputChannel;
 
 pub use crate::permission::DomainPermission;
 
+/// Controls how many times a worker can execute functions before being recycled.
+///
+/// Worker recycling helps prevent memory leaks from accumulated module cache and state.
+/// When a worker reaches its execution limit, it will be invalidated and recreated
+/// with a fresh runtime on the next use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaxExecutions {
+    Unlimited,
+    Limited(u64),
+}
+
+impl Default for MaxExecutions {
+    fn default() -> Self {
+        MaxExecutions::Limited(100)
+    }
+}
+
+impl MaxExecutions {
+    /// Check if the execution count has been exceeded
+    pub fn is_exceeded(&self, count: u64) -> bool {
+        match self {
+            MaxExecutions::Unlimited => false,
+            MaxExecutions::Limited(max) => count >= *max,
+        }
+    }
+}
+
 /// Policy for when to recycle/invalidate a runtime
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RecyclePolicy {
@@ -65,7 +92,7 @@ pub struct WorkerOptions {
     pub evaluation_timeout: Duration,
     pub domain_permission: DomainPermission,
     pub recycle_policy: RecyclePolicy,
-    pub max_executions: Option<u64>,
+    pub max_executions: MaxExecutions,
 }
 
 impl WorkerOptions {
@@ -88,8 +115,8 @@ impl WorkerOptions {
         self
     }
 
-    pub fn with_max_executions(mut self, max: u64) -> Self {
-        self.max_executions = Some(max);
+    pub fn with_max_executions(mut self, max: MaxExecutions) -> Self {
+        self.max_executions = max;
         self
     }
 }
@@ -100,7 +127,7 @@ impl Default for WorkerOptions {
             evaluation_timeout: Duration::from_secs(5),
             domain_permission: DomainPermission::DenyAll,
             recycle_policy: RecyclePolicy::default(),
-            max_executions: None,
+            max_executions: MaxExecutions::default(),
         }
     }
 }

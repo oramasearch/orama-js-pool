@@ -97,11 +97,8 @@ impl Manager for WorkerManager {
                 .with_cache(cache)
                 .with_domain_permission(worker_options.domain_permission)
                 .with_evaluation_timeout(worker_options.evaluation_timeout)
+                .with_max_executions(worker_options.max_executions)
                 .with_version(version);
-
-            if let Some(max_executions) = worker_options.max_executions {
-                builder = builder.with_max_executions(max_executions);
-            }
 
             for (name, def) in modules {
                 builder = builder.add_module(name, def.code);
