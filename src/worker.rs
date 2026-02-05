@@ -22,7 +22,7 @@ struct ModuleInfo {
 
 /// Worker that can execute multiple modules with a shared runtime
 pub struct Worker {
-    runtime: Option<Runtime<serde_json::Value, serde_json::Value>>,
+    runtime: Option<Runtime>,
     modules: HashMap<String, ModuleInfo>,
     cache: SharedCache,
     domain_permission: DomainPermission,
@@ -136,9 +136,7 @@ impl Worker {
     }
 
     // Checks if the runtime is healthy otherwise it recreate it.
-    async fn get_runtime(
-        &mut self,
-    ) -> Result<&mut Runtime<serde_json::Value, serde_json::Value>, RuntimeError> {
+    async fn get_runtime(&mut self) -> Result<&mut Runtime, RuntimeError> {
         let needs_rebuild = !matches!(&self.runtime, Some(rt) if rt.is_alive());
 
         if needs_rebuild {
@@ -151,7 +149,7 @@ impl Worker {
 
     /// Rebuild the runtime with all currently registered modules
     async fn rebuild_runtime(&mut self) -> Result<(), RuntimeError> {
-        let mut runtime = Runtime::<serde_json::Value, serde_json::Value>::new(
+        let mut runtime = Runtime::new(
             self.domain_permission.clone(),
             self.evaluation_timeout,
             self.cache.clone(),

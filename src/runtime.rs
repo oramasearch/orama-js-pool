@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, sync::Arc, thread::JoinHandle, time::Duration};
+use std::{sync::Arc, thread::JoinHandle, time::Duration};
 
 use deno_core::{
     error::CoreError, v8::IsolateHandle, ModuleCodeString, ModuleSpecifier, PollEventLoopOptions,
@@ -141,7 +141,7 @@ enum RuntimeEvent {
 use std::collections::HashMap;
 
 /// Low-level runtime managing a single Deno JsRuntime instance with multiple modules
-pub struct Runtime<Input, Output> {
+pub struct Runtime {
     handler: IsolateHandle,
     join_handler: JoinHandle<()>,
     sender: tokio::sync::mpsc::Sender<RuntimeEvent>,
@@ -149,18 +149,15 @@ pub struct Runtime<Input, Output> {
     should_recreate: bool,
     loaded_modules: HashMap<String, String>, // module_name -> specifier
     evaluation_timeout: Duration,
-    _p: PhantomData<(Input, Output)>,
 }
 
-impl<Input, Output> Drop for Runtime<Input, Output> {
+impl Drop for Runtime {
     fn drop(&mut self) {
         self.handler.terminate_execution();
     }
 }
 
-impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 'static>
-    Runtime<Input, Output>
-{
+impl Runtime {
     pub async fn new(
         domain_permission: DomainPermission,
         evaluation_timeout: Duration,
@@ -199,7 +196,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                             CustomPermissions {
                                 domain_permission: domain_permission.clone(),
                             },
-                            ChannelStorage::<Output> {
+                            ChannelStorage::<serde_json::Value> {
                                 stream_handler: None,
                             },
                             StdoutHandler(None),
@@ -324,7 +321,6 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                 should_recreate: false,
                 loaded_modules: HashMap::new(),
                 evaluation_timeout,
-                _p: PhantomData,
             }),
         }
     }
@@ -373,7 +369,10 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
     }
 
     /// Execute a function with the given parameters in a specific module
-    pub async fn exec(
+    pub async fn exec<
+        Input: TryIntoFunctionParameters + Send,
+        Output: DeserializeOwned + Send + 'static,
+    >(
         &mut self,
         module_name: &str,
         function_name: String,
