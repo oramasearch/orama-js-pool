@@ -38,7 +38,11 @@ where
 
         if v.is_array() {
             // Avoid cloning the array
-            let v = v.as_array_mut().unwrap().drain(..).collect();
+            let v = v
+                .as_array_mut()
+                .expect("Value should be array after is_array check")
+                .drain(..)
+                .collect();
             Ok(FunctionParameters(v))
         } else {
             Ok(FunctionParameters(vec![v]))

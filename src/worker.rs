@@ -435,4 +435,76 @@ mod tests {
             "Counter should reset after max_executions is reached"
         );
     }
+
+    #[tokio::test]
+    async fn test_runtime_error_on_invalid_function_code() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        // This code has a syntax error in the function body that will only be
+        // triggered when the function is executed (not during module evaluation)
+        let code_with_runtime_syntax_error = r#"
+            function badFunction() {
+                // This will cause a syntax error during dynamic code generation
+                eval('this is not valid javascript!!!');
+                return 42;
+            }
+            export default { badFunction };
+        "#;
+
+        let mut worker = Worker::builder()
+            .add_module("test", code_with_runtime_syntax_error.to_string())
+            .build()
+            .await
+            .unwrap();
+
+        let result: Result<i32, RuntimeError> = worker
+            .exec("test", "badFunction", (), ExecOptions::default())
+            .await;
+
+        // Should return an error, not panic
+        assert!(
+            result.is_err(),
+            "Should return error for runtime syntax error"
+        );
+        assert!(
+            matches!(result.unwrap_err(), RuntimeError::ErrorThrown(_)),
+            "Should return ErrorThrown variant"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_runtime_error_on_eval_failure() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        // This code will fail during the eval phase (after load_side_es_module_from_code)
+        // by throwing an error during async function execution
+        let code_with_async_error = r#"
+            async function throwingFunction() {
+                // Force an error during execution that affects the eval phase
+                await Promise.reject(new Error("Async execution failed"));
+                return 42;
+            }
+            export default { throwingFunction };
+        "#;
+
+        let mut worker = Worker::builder()
+            .add_module("test", code_with_async_error.to_string())
+            .build()
+            .await
+            .unwrap();
+
+        let result: Result<i32, RuntimeError> = worker
+            .exec("test", "throwingFunction", (), ExecOptions::default())
+            .await;
+
+        // Should return an error, not panic
+        assert!(
+            result.is_err(),
+            "Should return error for async execution failure"
+        );
+        assert!(
+            matches!(result.unwrap_err(), RuntimeError::ErrorThrown(_)),
+            "Should return ErrorThrown variant"
+        );
+    }
 }

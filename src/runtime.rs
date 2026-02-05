@@ -109,7 +109,10 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
             tokio::sync::oneshot::channel::<Result<(), CoreError>>();
 
         let thread_id = std::thread::spawn(move || {
-            let rt = Builder::new_current_thread().enable_all().build().unwrap();
+            let rt = Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to build tokio runtime in Deno runtime");
 
             let local = LocalSet::new();
             local.spawn_local(async move {
@@ -208,7 +211,9 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
             rt.block_on(local);
         });
 
-        let handler = init_receiver1.await.unwrap();
+        let handler = init_receiver1
+            .await
+            .expect("Failed to receive IsolateHandle from runtime initialization");
         let handler = match handler {
             Ok(handler) => handler,
             Err(e) => {
@@ -283,7 +288,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                 sender,
             })
             .await
-            .unwrap();
+            .expect("Failed to send LoadModule event to runtime");
 
         tokio::time::timeout(self.evaluation_timeout, receiver)
             .await
@@ -294,7 +299,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                 self.should_recreate = true;
                 RuntimeError::InitTimeout
             })?
-            .unwrap()?;
+            .expect("Failed to receive LoadModule response from runtime")?;
 
         self.loaded_modules.insert(module_name, specifier);
 
@@ -342,7 +347,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                 sender,
             })
             .await
-            .unwrap();
+            .expect("Failed to send ExecFunction event to runtime");
 
         let output = tokio::time::timeout(timeout, receiver).await;
 
@@ -378,7 +383,8 @@ async fn load_module(
     specifier: &str,
     code: String,
 ) -> Result<(), RuntimeError> {
-    let specifier = ModuleSpecifier::parse(specifier).unwrap();
+    let specifier =
+        ModuleSpecifier::parse(specifier).expect("Module specifier should be valid URL format");
 
     let mod_id = js_runtime
         .load_side_es_module_from_code(&specifier, code)
@@ -415,7 +421,8 @@ async fn execute_function(
     input_params: &str,
 ) -> Result<serde_json::Value, RuntimeError> {
     // Unique specifier prevents Deno's module cache from reusing previous execution results
-    let exec_specifier = ModuleSpecifier::parse(&format!("file:/exec_{id}")).unwrap();
+    let exec_specifier = ModuleSpecifier::parse(&format!("file:/exec_{id}"))
+        .expect("Execution specifier should be valid URL format");
 
     // Integrated function checking and execution in a single JS evaluation.
     // This checks if:
@@ -463,7 +470,16 @@ if (typeof main !== 'object') {{
     {
         Ok(mod_id) => mod_id,
         Err(e) => {
-            panic!("load_side_es_module_from_code {e:?}");
+            return match e {
+                CoreError::Js(js_err) => {
+                    if js_err.name.as_ref().is_some_and(|s| s == "SyntaxError") {
+                        Err(RuntimeError::CompilationError(Box::new(js_err)))
+                    } else {
+                        Err(RuntimeError::ErrorThrown(Box::new(js_err)))
+                    }
+                }
+                _ => Err(RuntimeError::UnknownExecutionError(Box::new(e))),
+            };
         }
     };
     debug!("Evaluating code");
@@ -493,16 +509,20 @@ if (typeof main !== 'object') {{
     match eval.await {
         Ok(_) => {}
         Err(e) => {
-            panic!("eval Err {e:?}");
+            return Err(RuntimeError::UnknownExecutionError(Box::new(e)));
         }
     };
 
     let mut scope: deno_core::v8::HandleScope<'_> = js_runtime.handle_scope();
     let context = scope.get_current_context();
     let global = context.global(&mut scope);
-    let key = deno_core::v8::String::new(&mut scope, GLOBAL_VARIABLE_NAME).unwrap();
-    let value = global.get(&mut scope, key.into()).unwrap();
-    let output: serde_json::Value = deno_core::serde_v8::from_v8(&mut scope, value).unwrap();
+    let key = deno_core::v8::String::new(&mut scope, GLOBAL_VARIABLE_NAME)
+        .expect("Failed to create V8 string for global variable name");
+    let value = global
+        .get(&mut scope, key.into())
+        .expect("Failed to get global variable from V8 context");
+    let output: serde_json::Value = deno_core::serde_v8::from_v8(&mut scope, value)
+        .expect("Failed to deserialize V8 value to JSON");
 
     // Check if the output contains a function validation error
     if let Some(obj) = output.as_object() {

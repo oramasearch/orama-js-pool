@@ -42,14 +42,20 @@ impl WorkerManager {
     }
 
     pub fn update_modules(&self, modules: HashMap<String, ModuleDefinition>) {
-        let mut modules_guard = self.modules.write().unwrap();
+        let mut modules_guard = self
+            .modules
+            .write()
+            .expect("Failed to acquire write lock on modules");
         *modules_guard = modules;
         drop(modules_guard);
     }
 
     /// Get a clone of current modules
     pub fn modules(&self) -> HashMap<String, ModuleDefinition> {
-        self.modules.read().unwrap().clone()
+        self.modules
+            .read()
+            .expect("Failed to acquire read lock on modules")
+            .clone()
     }
 
     /// Get shared cache
@@ -64,7 +70,11 @@ impl Manager for WorkerManager {
 
     /// Create a new worker with current module definitions
     fn create(&self) -> impl Future<Output = Result<Self::Type, Self::Error>> + Send {
-        let modules = self.modules.read().unwrap().clone();
+        let modules = self
+            .modules
+            .read()
+            .expect("Failed to acquire read lock on modules")
+            .clone();
         let cache = self.cache.clone();
         let worker_options = self.worker_options.clone();
 

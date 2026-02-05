@@ -68,7 +68,7 @@ impl Default for SharedCache {
 fn current_timestamp_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .expect("System time should be after UNIX_EPOCH")
         .as_millis() as u64
 }
 
@@ -78,7 +78,10 @@ fn op_cache_get(
     #[state] cache: &SharedCache,
     #[string] key: String,
 ) -> Result<Option<serde_json::Value>, CoreError> {
-    let mut cache_data = cache.data.write().unwrap();
+    let mut cache_data = cache
+        .data
+        .write()
+        .expect("Failed to acquire write lock on cache");
 
     if let Some(entry) = cache_data.get(&key) {
         // Check if expired
@@ -105,13 +108,21 @@ fn op_cache_set(
 
     let entry = CacheEntry { value, expires_at };
 
-    cache.data.write().unwrap().insert(key, entry);
+    cache
+        .data
+        .write()
+        .expect("Failed to acquire write lock on cache")
+        .insert(key, entry);
     Ok(())
 }
 
 #[op2(fast)]
 fn op_cache_delete(#[state] cache: &SharedCache, #[string] key: String) -> Result<(), CoreError> {
-    cache.data.write().unwrap().remove(&key);
+    cache
+        .data
+        .write()
+        .expect("Failed to acquire write lock on cache")
+        .remove(&key);
     Ok(())
 }
 
