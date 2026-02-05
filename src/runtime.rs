@@ -24,6 +24,68 @@ pub static RUNTIME_SNAPSHOT: &[u8] =
 
 const GLOBAL_VARIABLE_NAME: &str = "__result";
 
+/// A validated module name that can be safely converted to a Deno ModuleSpecifier.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ModuleName(String);
+
+impl ModuleName {
+    /// Create a new validated module name.
+    /// Returns an error if the name cannot be converted to a valid file:// URL.
+    pub fn new(name: impl Into<String>) -> Result<Self, RuntimeError> {
+        let name = name.into();
+
+        if name.is_empty() {
+            return Err(RuntimeError::InvalidModuleName(
+                name,
+                "Module name cannot be empty".to_string(),
+            ));
+        }
+
+        let specifier_str = format!("file:/{name}");
+        ModuleSpecifier::parse(&specifier_str)
+            .map_err(|e| RuntimeError::InvalidModuleName(name.clone(), e.to_string()))?;
+
+        Ok(Self(name))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+
+    /// Convert to a Deno ModuleSpecifier.
+    /// This is infallible because we validated the name during construction.
+    pub(crate) fn to_specifier(&self) -> ModuleSpecifier {
+        ModuleSpecifier::parse(&format!("file:/{}", self.0))
+            .expect("ModuleName should always produce valid specifier")
+    }
+}
+
+impl std::fmt::Display for ModuleName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl TryFrom<String> for ModuleName {
+    type Error = RuntimeError;
+
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        Self::new(name)
+    }
+}
+
+impl TryFrom<&str> for ModuleName {
+    type Error = RuntimeError;
+
+    fn try_from(name: &str) -> Result<Self, Self::Error> {
+        Self::new(name)
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum RuntimeError {
     #[error("Cannot start runtime: {0}")]
@@ -52,6 +114,8 @@ pub enum RuntimeError {
     CompilationError(Box<deno_core::error::JsError>),
     #[error("The runtime has been terminated")]
     Terminated,
+    #[error("Invalid module name '{0}': {1}")]
+    InvalidModuleName(String, String),
     #[error("Unknown error: {0}")]
     Unknown(String),
 }
@@ -268,7 +332,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
     /// Load a module into the runtime
     pub async fn load_module<Code: Into<ModuleCodeString>>(
         &mut self,
-        module_name: String,
+        module_name: ModuleName,
         code: Code,
     ) -> Result<(), RuntimeError> {
         if !self.is_alive() {
@@ -277,13 +341,14 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
 
         let code: ModuleCodeString = code.into();
         let code_string = code.to_string();
-        let specifier = format!("file:/{module_name}");
+        let specifier = module_name.to_specifier();
+        let specifier_str = specifier.to_string();
 
         let (sender, receiver) = tokio::sync::oneshot::channel();
 
         self.sender
             .send(RuntimeEvent::LoadModule {
-                specifier: specifier.clone(),
+                specifier: specifier_str.clone(),
                 code: code_string,
                 sender,
             })
@@ -293,7 +358,7 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
         tokio::time::timeout(self.evaluation_timeout, receiver)
             .await
             .map_err(|_| {
-                warn!("Module evaluation timeout for {module_name}");
+                warn!("Module evaluation timeout for {}", module_name);
                 // Terminate to stop expensive module; worker will recreate runtime
                 self.handler.terminate_execution();
                 self.should_recreate = true;
@@ -301,7 +366,8 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
             })?
             .expect("Failed to receive LoadModule response from runtime")?;
 
-        self.loaded_modules.insert(module_name, specifier);
+        self.loaded_modules
+            .insert(module_name.into_string(), specifier_str);
 
         Ok(())
     }
@@ -383,8 +449,8 @@ async fn load_module(
     specifier: &str,
     code: String,
 ) -> Result<(), RuntimeError> {
-    let specifier =
-        ModuleSpecifier::parse(specifier).expect("Module specifier should be valid URL format");
+    let specifier = ModuleSpecifier::parse(specifier)
+        .expect("Module specifier from ModuleName should always be valid");
 
     let mod_id = js_runtime
         .load_side_es_module_from_code(&specifier, code)
@@ -422,7 +488,7 @@ async fn execute_function(
 ) -> Result<serde_json::Value, RuntimeError> {
     // Unique specifier prevents Deno's module cache from reusing previous execution results
     let exec_specifier = ModuleSpecifier::parse(&format!("file:/exec_{id}"))
-        .expect("Execution specifier should be valid URL format");
+        .expect("Generated execution specifier should always be valid");
 
     // Integrated function checking and execution in a single JS evaluation.
     // This checks if:
@@ -565,4 +631,37 @@ fn update_inner_state(
     state.put(CustomPermissions { domain_permission });
     drop(rc_state_ref);
     drop(rc_state);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_module_names() {
+        assert!(ModuleName::new("simple").is_ok());
+        assert!(ModuleName::new("with-dash").is_ok());
+        assert!(ModuleName::new("with_underscore").is_ok());
+        assert!(ModuleName::new("with/path").is_ok());
+        assert!(ModuleName::new("module.js").is_ok());
+
+        assert!(ModuleName::new("").is_err());
+    }
+
+    #[test]
+    fn test_to_specifier() {
+        let name = ModuleName::new("test/module").unwrap();
+        let specifier = name.to_specifier();
+        // Deno normalizes file URLs with three slashes
+        assert_eq!(specifier.as_str(), "file:///test/module");
+    }
+
+    #[test]
+    fn test_try_from() {
+        let from_string: Result<ModuleName, _> = "test".to_string().try_into();
+        assert!(from_string.is_ok());
+
+        let from_str: Result<ModuleName, _> = "test".try_into();
+        assert!(from_str.is_ok());
+    }
 }

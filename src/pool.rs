@@ -92,7 +92,7 @@ impl Pool {
         let mut modules = self.manager.modules();
 
         modules.insert(
-            name.clone(),
+            name,
             ModuleDefinition {
                 code: module_code.as_str().into(),
             },

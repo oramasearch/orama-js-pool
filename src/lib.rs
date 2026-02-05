@@ -14,5 +14,5 @@ pub use options::{DomainPermission, ExecOptions, RecyclePolicy, WorkerOptions};
 pub use orama_extension::{OutputChannel, SharedCache};
 pub use parameters::{FunctionParameters, TryIntoFunctionParameters};
 pub use pool::{Pool, PoolBuilder};
-pub use runtime::{Runtime, RuntimeError};
+pub use runtime::{ModuleName, Runtime, RuntimeError};
 pub use worker::{Worker, WorkerBuilder};

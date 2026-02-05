@@ -5,6 +5,7 @@ use serde::de::DeserializeOwned;
 use tracing::warn;
 
 use crate::orama_extension::SharedCache;
+use crate::runtime::ModuleName;
 
 use super::{
     options::{DomainPermission, ExecOptions},
@@ -54,18 +55,24 @@ impl Worker {
     }
 
     /// Add a module to this worker
-    pub async fn add_module<Code>(&mut self, name: String, code: Code) -> Result<(), RuntimeError>
+    pub async fn add_module<Code>(
+        &mut self,
+        name: impl Into<String>,
+        code: Code,
+    ) -> Result<(), RuntimeError>
     where
         Code: Into<ModuleCodeString> + Send + 'static,
     {
+        let name_string = name.into();
+        let validated_name = ModuleName::new(&name_string)?;
         let code_string: ModuleCodeString = code.into();
         let (runtime_code, module_code) = code_string.into_cheap_copy();
 
         let runtime = self.get_runtime().await?;
-        runtime.load_module(name.clone(), runtime_code).await?;
+        runtime.load_module(validated_name, runtime_code).await?;
 
         self.modules.insert(
-            name.clone(),
+            name_string,
             ModuleInfo {
                 code: module_code.as_str().into(),
             },
@@ -152,7 +159,10 @@ impl Worker {
         .await?;
 
         for (name, info) in &self.modules {
-            runtime.load_module(name.clone(), info.code.clone()).await?;
+            let validated_name = ModuleName::new(name.clone())?;
+            runtime
+                .load_module(validated_name, info.code.clone())
+                .await?;
         }
 
         self.runtime = Some(runtime);
@@ -298,14 +308,14 @@ mod tests {
 
         // also on adding a module
         let result = worker
-            .add_module("expensive".into(), expensive_code.to_string())
+            .add_module("expensive", expensive_code.to_string())
             .await;
 
         assert!(result.is_err(), "Module evaluation should timeout");
         assert!(matches!(result, Err(RuntimeError::InitTimeout)));
 
         worker
-            .add_module("not_expensive_2".into(), not_expensive_code.to_string())
+            .add_module("not_expensive_2", not_expensive_code.to_string())
             .await
             .unwrap();
     }
@@ -374,7 +384,7 @@ mod tests {
 
         // Override the module
         worker
-            .add_module("test".into(), override_code.to_string())
+            .add_module("test", override_code.to_string())
             .await
             .unwrap();
 
@@ -505,6 +515,27 @@ mod tests {
         assert!(
             matches!(result.unwrap_err(), RuntimeError::ErrorThrown(_)),
             "Should return ErrorThrown variant"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_invalid_module_name() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        // Test that invalid module names are caught early
+        let code = r#"
+            function test() { return 42; }
+            export default { test };
+        "#;
+
+        let mut worker = Worker::builder().build().await.unwrap();
+
+        // Empty module name should fail
+        let result = worker.add_module("", code.to_string()).await;
+        assert!(result.is_err(), "Empty module name should fail");
+        assert!(
+            matches!(result.unwrap_err(), RuntimeError::InvalidModuleName(_, _)),
+            "Should return InvalidModuleName error"
         );
     }
 }
