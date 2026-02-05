@@ -63,11 +63,6 @@ enum RuntimeEvent {
         code: String,
         sender: tokio::sync::oneshot::Sender<Result<(), RuntimeError>>,
     },
-    CheckFunction {
-        module_specifier: String,
-        function_name: String,
-        sender: tokio::sync::oneshot::Sender<u8>,
-    },
     ExecFunction {
         id: u64,
         module_specifier: String,
@@ -179,16 +174,6 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
                             sender,
                         } => {
                             let result = load_module(&mut js_runtime, &specifier, code).await;
-                            let _ = sender.send(result);
-                        }
-                        RuntimeEvent::CheckFunction {
-                            module_specifier,
-                            function_name,
-                            sender,
-                        } => {
-                            let result =
-                                check_function(&mut js_runtime, &module_specifier, &function_name)
-                                    .await;
                             let _ = sender.send(result);
                         }
                         RuntimeEvent::ExecFunction {
@@ -316,48 +301,6 @@ impl<Input: TryIntoFunctionParameters + Send, Output: DeserializeOwned + Send + 
         Ok(())
     }
 
-    /// Check if a function exists and is callable in a specific module
-    pub async fn check_function(
-        &mut self,
-        module_name: &str,
-        function_name: String,
-    ) -> Result<(), RuntimeError> {
-        if !self.is_alive() {
-            return Err(RuntimeError::Terminated);
-        }
-
-        let module_specifier = self
-            .loaded_modules
-            .get(module_name)
-            .ok_or_else(|| RuntimeError::MissingModule(module_name.to_string()))?
-            .clone();
-
-        self.exec_count += 1;
-
-        let (sender, receiver) = tokio::sync::oneshot::channel::<u8>();
-
-        self.sender
-            .send(RuntimeEvent::CheckFunction {
-                module_specifier,
-                function_name: function_name.clone(),
-                sender,
-            })
-            .await
-            .unwrap();
-
-        let output = receiver
-            .await
-            .map_err(|e| RuntimeError::Unknown(e.to_string()))?;
-
-        match output {
-            0 => Ok(()),
-            1 => Err(RuntimeError::DefaultExportIsNotAnObject),
-            2 => Err(RuntimeError::MissingExportedFunction(function_name.clone())),
-            3 => Err(RuntimeError::ExportIsNotAFunction(function_name)),
-            _ => unreachable!(),
-        }
-    }
-
     /// Execute a function with the given parameters in a specific module
     pub async fn exec(
         &mut self,
@@ -464,70 +407,6 @@ async fn load_module(
     Ok(())
 }
 
-async fn check_function(
-    js_runtime: &mut deno_core::JsRuntime,
-    module_specifier: &str,
-    function_name: &str,
-) -> u8 {
-    let check_specifier = ModuleSpecifier::parse("file:/check").unwrap();
-    let code = format!(
-        r#"
-import main from "{module_specifier}";
-globalThis.{GLOBAL_VARIABLE_NAME} = 0;
-if (typeof main !== 'object') {{
-    globalThis.{GLOBAL_VARIABLE_NAME} = 1;
-}} else if (!main.{function_name}) {{
-    globalThis.{GLOBAL_VARIABLE_NAME} = 2;
-}} else if (typeof main.{function_name} !== 'function') {{
-    globalThis.{GLOBAL_VARIABLE_NAME} = 3;
-}}
-        "#,
-    );
-
-    let mod_id = match js_runtime
-        .load_side_es_module_from_code(&check_specifier, code)
-        .await
-    {
-        Ok(mod_id) => mod_id,
-        Err(CoreError::Js(e)) => {
-            if e.name.as_ref() == Some(&"SyntaxError".to_string())
-                && e.message
-                    .as_ref()
-                    .is_some_and(|s| s.contains("does not provide an export named 'default'"))
-            {
-                return 1;
-            }
-            panic!("load_side_es_module_from_code Err JS {e:?}");
-        }
-        Err(e) => {
-            panic!("load_side_es_module_from_code {e:?}");
-        }
-    };
-
-    let eval = js_runtime.mod_evaluate(mod_id);
-
-    match js_runtime.run_event_loop(Default::default()).await {
-        Ok(_) => {}
-        Err(e) => {
-            panic!("run_event_loop {e:?}");
-        }
-    };
-
-    match eval.await {
-        Ok(_) => {}
-        Err(e) => {
-            panic!("eval: {e:?}");
-        }
-    };
-
-    let mut scope: deno_core::v8::HandleScope<'_> = js_runtime.handle_scope();
-    let context = scope.get_current_context();
-    let global = context.global(&mut scope);
-    let key = deno_core::v8::String::new(&mut scope, GLOBAL_VARIABLE_NAME).unwrap();
-    let value = global.get(&mut scope, key.into()).unwrap();
-    deno_core::serde_v8::from_v8(&mut scope, value).unwrap()
-}
-
 async fn execute_function(
     js_runtime: &mut deno_core::JsRuntime,
     id: u64,
@@ -538,6 +417,13 @@ async fn execute_function(
     // Unique specifier prevents Deno's module cache from reusing previous execution results
     let exec_specifier = ModuleSpecifier::parse(&format!("file:/exec_{id}")).unwrap();
 
+    // Integrated function checking and execution in a single JS evaluation.
+    // This checks if:
+    // 1. The default export is an object
+    // 2. The function exists in the default export
+    // 3. The function is actually callable
+    // If checks pass, we execute the function. Otherwise, we set an error code.
+    //
     // Conditionally await the function result to avoid overhead for sync functions.
     // We check if the result is async using two conditions:
     // 1. instanceof Promise - catches native Promises from async functions
@@ -546,19 +432,28 @@ async fn execute_function(
     let code = format!(
         r#"
 import main from "{module_specifier}";
-const thisContext = {{
-    context: {{
-        cache: {{
-            get: (key) => Deno.core.ops.op_cache_get(key) ?? undefined,
-            set: (key, value, options) => Deno.core.ops.op_cache_set(key, value, options?.ttl),
-            delete: (key) => Deno.core.ops.op_cache_delete(key)
-        }},
-    }}
-}};
 
-const result = main.{function_name}.call(thisContext, ...{input_params});
-const isAsync = result instanceof Promise || (result && typeof result.then === 'function');
-globalThis.{GLOBAL_VARIABLE_NAME} = isAsync ? await result : result;
+if (typeof main !== 'object') {{
+    globalThis.{GLOBAL_VARIABLE_NAME} = {{ __error: 1 }};
+}} else if (!main.{function_name}) {{
+    globalThis.{GLOBAL_VARIABLE_NAME} = {{ __error: 2 }};
+}} else if (typeof main.{function_name} !== 'function') {{
+    globalThis.{GLOBAL_VARIABLE_NAME} = {{ __error: 3 }};
+}} else {{
+    const thisContext = {{
+        context: {{
+            cache: {{
+                get: (key) => Deno.core.ops.op_cache_get(key) ?? undefined,
+                set: (key, value, options) => Deno.core.ops.op_cache_set(key, value, options?.ttl),
+                delete: (key) => Deno.core.ops.op_cache_delete(key)
+            }},
+        }}
+    }};
+
+    const result = main.{function_name}.call(thisContext, ...{input_params});
+    const isAsync = result instanceof Promise || (result && typeof result.then === 'function');
+    globalThis.{GLOBAL_VARIABLE_NAME} = isAsync ? await result : result;
+}}
         "#,
     );
 
@@ -608,6 +503,22 @@ globalThis.{GLOBAL_VARIABLE_NAME} = isAsync ? await result : result;
     let key = deno_core::v8::String::new(&mut scope, GLOBAL_VARIABLE_NAME).unwrap();
     let value = global.get(&mut scope, key.into()).unwrap();
     let output: serde_json::Value = deno_core::serde_v8::from_v8(&mut scope, value).unwrap();
+
+    // Check if the output contains a function validation error
+    if let Some(obj) = output.as_object() {
+        if let Some(error_code) = obj.get("__error").and_then(|v| v.as_u64()) {
+            return match error_code {
+                1 => Err(RuntimeError::DefaultExportIsNotAnObject),
+                2 => Err(RuntimeError::MissingExportedFunction(
+                    function_name.to_string(),
+                )),
+                3 => Err(RuntimeError::ExportIsNotAFunction(
+                    function_name.to_string(),
+                )),
+                _ => unreachable!(),
+            };
+        }
+    }
 
     Ok(output)
 }

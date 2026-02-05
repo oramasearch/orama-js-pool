@@ -91,10 +91,6 @@ impl Worker {
 
         let runtime = self.get_runtime().await?;
 
-        runtime
-            .check_function(module_name, function_name.to_string())
-            .await?;
-
         let params_tuple = params.try_into_function_parameter()?;
         let params_value = serde_json::to_value(params_tuple.0)?;
 

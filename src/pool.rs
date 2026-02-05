@@ -344,10 +344,14 @@ mod tests {
 
         assert!(result_function.is_err());
         // With proper multi-module support, the function name is just the function name
-        assert!(matches!(
-            result_function.unwrap_err(),
-            RuntimeError::MissingExportedFunction(name) if name == "missingFunctionTest"
-        ));
+        let err = result_function.unwrap_err();
+        assert!(
+            matches!(
+            &err,
+                RuntimeError::MissingExportedFunction(name) if name == "missingFunctionTest"
+            ),
+            "Instead got error: {err}"
+        );
     }
 
     #[tokio::test]
