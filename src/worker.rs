@@ -124,7 +124,7 @@ impl Worker {
             self.rebuild_runtime().await?;
         }
 
-        Ok(self.runtime.as_mut().unwrap())
+        self.runtime.as_mut().ok_or(RuntimeError::Terminated)
     }
 
     /// Rebuild the runtime with all currently registered modules
