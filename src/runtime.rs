@@ -496,12 +496,6 @@ async fn execute_function(
     // 2. The function exists in the default export
     // 3. The function is actually callable
     // If checks pass, we execute the function. Otherwise, we set an error code.
-    //
-    // Conditionally await the function result to avoid overhead for sync functions.
-    // We check if the result is async using two conditions:
-    // 1. instanceof Promise - catches native Promises from async functions
-    // 2. thenable check (has a .then method) - catches custom Promise-like objects
-    // For synchronous functions, we avoid the microtask scheduling overhead of await.
     let code = format!(
         r#"
 import main from "{module_specifier}";
@@ -524,8 +518,7 @@ if (typeof main !== 'object') {{
     }};
 
     const result = main.{function_name}.apply(thisContext, {input_params});
-    const isAsync = result instanceof Promise || (result && typeof result.then === 'function');
-    globalThis.{GLOBAL_VARIABLE_NAME} = isAsync ? await result : result;
+    globalThis.{GLOBAL_VARIABLE_NAME} = await result;
 }}
         "#,
     );
