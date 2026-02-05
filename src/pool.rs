@@ -100,6 +100,10 @@ impl Pool {
 
         self.manager.update_modules(modules);
 
+        // Force recycle all existing workers by retaining none
+        // This ensures all workers will be recreated with the updated module
+        self.inner.retain(|_, _| false);
+
         Ok(())
     }
 
@@ -626,14 +630,108 @@ mod tests {
             .await
             .unwrap();
 
-        // Test all the instances
-        for _ in 1..10 {
-            let result3: i32 = pool
-                .exec("versioned", "getValue", (), ExecOptions::new())
-                .await
-                .unwrap();
-            assert_eq!(result3, 300, "Second update should return newest value");
+        // Test all the instances concurrently
+        let mut handles = vec![];
+        for _ in 0..10 {
+            let pool_clone = pool.clone();
+            let handle = tokio::spawn(async move {
+                let result: i32 = pool_clone
+                    .exec("versioned", "getValue", (), ExecOptions::new())
+                    .await
+                    .unwrap();
+                result
+            });
+            handles.push(handle);
         }
+
+        // Wait for all tasks and verify results
+        for handle in handles {
+            let result = handle.await.unwrap();
+            assert_eq!(result, 300, "Second update should return newest value");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pool_add_module_old_workers_stay_in_pool() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let initial_code = r#"
+            async function getValue() {
+                await new Promise(resolve => setTimeout(resolve, 10));
+                return 100;
+            }
+            export default { getValue };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(5)
+            .add_module("versioned", initial_code.to_string())
+            .build()
+            .await
+            .unwrap();
+
+        // Fill the pool with 5 workers that have the old code
+        let mut handles = vec![];
+        for _ in 0..100 {
+            let pool_clone = pool.clone();
+            let handle = tokio::spawn(async move {
+                let result: i32 = pool_clone
+                    .exec("versioned", "getValue", (), ExecOptions::new())
+                    .await
+                    .unwrap();
+                result
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            let result = handle.await.unwrap();
+            assert_eq!(result, 100, "Should return initial value");
+        }
+
+        // Now update the module
+        let updated_code = r#"
+            async function getValue() {
+                await new Promise(resolve => setTimeout(resolve, 10));
+                return 200;
+            }
+            export default { getValue };
+        "#;
+
+        pool.add_module("versioned", updated_code.to_string())
+            .await
+            .unwrap();
+
+        // Immediately run 10 concurrent executions
+        // If old workers are still in the pool, we should see some return 100
+        let mut handles = vec![];
+        for _ in 0..100 {
+            let pool_clone = pool.clone();
+            let handle = tokio::spawn(async move {
+                let result: i32 = pool_clone
+                    .exec("versioned", "getValue", (), ExecOptions::new())
+                    .await
+                    .unwrap();
+                result
+            });
+            handles.push(handle);
+        }
+
+        let mut results = vec![];
+        for handle in handles {
+            let result = handle.await.unwrap();
+            results.push(result);
+        }
+
+        // Check if any old workers (returning 100) are still in the pool
+        let old_values = results.iter().filter(|&&v| v == 100).count();
+        let new_values = results.iter().filter(|&&v| v == 200).count();
+
+        assert_eq!(
+            old_values, 0,
+            "Found {old_values} old workers still in pool! Old workers should be removed.",
+        );
+        assert_eq!(new_values, 100, "All workers should have the new code");
     }
 
     #[tokio::test]
