@@ -523,7 +523,7 @@ if (typeof main !== 'object') {{
         }}
     }};
 
-    const result = main.{function_name}.call(thisContext, ...{input_params});
+    const result = main.{function_name}.apply(thisContext, {input_params});
     const isAsync = result instanceof Promise || (result && typeof result.then === 'function');
     globalThis.{GLOBAL_VARIABLE_NAME} = isAsync ? await result : result;
 }}
