@@ -1,6 +1,9 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, RwLock},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, RwLock,
+    },
 };
 
 use deadpool::managed::{Manager, Metrics, RecycleError, RecycleResult};
@@ -24,6 +27,7 @@ pub struct ModuleDefinition {
 #[derive(Clone)]
 pub struct WorkerManager {
     modules: Arc<RwLock<HashMap<String, ModuleDefinition>>>,
+    version: Arc<AtomicU64>,
     cache: SharedCache,
     pub(crate) worker_options: WorkerOptions,
 }
@@ -36,6 +40,7 @@ impl WorkerManager {
     ) -> Self {
         Self {
             modules: Arc::new(RwLock::new(modules)),
+            version: Arc::new(AtomicU64::new(1)),
             cache,
             worker_options,
         }
@@ -48,6 +53,9 @@ impl WorkerManager {
             .expect("Failed to acquire write lock on modules");
         *modules_guard = modules;
         drop(modules_guard);
+
+        // Increment version to invalidate old workers
+        self.version.fetch_add(1, Ordering::SeqCst);
     }
 
     /// Get a clone of current modules
@@ -56,6 +64,11 @@ impl WorkerManager {
             .read()
             .expect("Failed to acquire read lock on modules")
             .clone()
+    }
+
+    /// Get current version
+    pub fn current_version(&self) -> u64 {
+        self.version.load(Ordering::SeqCst)
     }
 
     /// Get shared cache
@@ -77,12 +90,14 @@ impl Manager for WorkerManager {
             .clone();
         let cache = self.cache.clone();
         let worker_options = self.worker_options.clone();
+        let version = self.current_version();
 
         async move {
             let mut builder = WorkerBuilder::new()
                 .with_cache(cache)
                 .with_domain_permission(worker_options.domain_permission)
-                .with_evaluation_timeout(worker_options.evaluation_timeout);
+                .with_evaluation_timeout(worker_options.evaluation_timeout)
+                .with_version(version);
 
             if let Some(max_executions) = worker_options.max_executions {
                 builder = builder.with_max_executions(max_executions);
@@ -98,7 +113,7 @@ impl Manager for WorkerManager {
         }
     }
 
-    /// Check if a worker is still healthy
+    /// Check if a worker is still healthy and has the correct version
     async fn recycle(
         &self,
         worker: &mut Self::Type,
@@ -106,6 +121,19 @@ impl Manager for WorkerManager {
     ) -> RecycleResult<Self::Error> {
         if !worker.is_alive() {
             return Err(RecycleError::Message("Worker not alive".into()));
+        }
+
+        // Check if worker version matches current version
+        let current_version = self.current_version();
+        if worker.version() != current_version {
+            return Err(RecycleError::Message(
+                format!(
+                    "Worker version mismatch: worker={}, current={}",
+                    worker.version(),
+                    current_version
+                )
+                .into(),
+            ));
         }
 
         Ok(())

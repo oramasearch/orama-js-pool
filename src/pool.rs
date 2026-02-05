@@ -100,16 +100,10 @@ impl Pool {
 
         self.manager.update_modules(modules);
 
-        // Force recycle all existing workers by retaining none
-        // This ensures all workers will be recreated with the updated module
-        self.inner.retain(|_, _| false);
-
         Ok(())
     }
 
     /// Remove a module from the pool
-    /// This will remove the module from the manager's module list and force all existing
-    /// workers in the pool to be recycled, ensuring they no longer have the removed module.
     pub async fn remove_module(&self, name: impl Into<String>) -> Result<(), RuntimeError> {
         let name = name.into();
 
@@ -121,9 +115,6 @@ impl Pool {
 
         modules.remove(&name);
         self.manager.update_modules(modules);
-
-        // Force recycle all existing workers by retaining none
-        self.inner.retain(|_, _| false);
 
         Ok(())
     }

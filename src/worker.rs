@@ -29,6 +29,7 @@ pub struct Worker {
     evaluation_timeout: std::time::Duration,
     max_executions: Option<u64>,
     execution_count: u64,
+    version: u64,
 }
 
 impl Worker {
@@ -38,6 +39,7 @@ impl Worker {
         domain_permission: DomainPermission,
         evaluation_timeout: std::time::Duration,
         max_executions: Option<u64>,
+        version: u64,
     ) -> Self {
         Self {
             runtime: None,
@@ -47,7 +49,13 @@ impl Worker {
             evaluation_timeout,
             max_executions,
             execution_count: 0,
+            version,
         }
+    }
+
+    /// Get the version of this worker
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     pub fn builder() -> WorkerBuilder {
@@ -201,6 +209,7 @@ pub struct WorkerBuilder {
     domain_permission: Option<DomainPermission>,
     evaluation_timeout: Option<std::time::Duration>,
     max_executions: Option<u64>,
+    version: u64,
 }
 
 impl WorkerBuilder {
@@ -212,6 +221,7 @@ impl WorkerBuilder {
             domain_permission: None,
             evaluation_timeout: None,
             max_executions: None,
+            version: 0,
         }
     }
 
@@ -251,6 +261,12 @@ impl WorkerBuilder {
         self
     }
 
+    /// Set the version for the worker
+    pub fn with_version(mut self, version: u64) -> Self {
+        self.version = version;
+        self
+    }
+
     /// Build the worker
     pub async fn build(self) -> Result<Worker, RuntimeError> {
         let cache = self.cache.unwrap_or_default();
@@ -264,6 +280,7 @@ impl WorkerBuilder {
             domain_permission,
             evaluation_timeout,
             self.max_executions,
+            self.version,
         );
 
         for (name, code) in self.modules {
