@@ -103,6 +103,27 @@ impl Pool {
         Ok(())
     }
 
+    /// Remove a module from the pool
+    /// This will remove the module from the manager's module list and force all existing
+    /// workers in the pool to be recycled, ensuring they no longer have the removed module.
+    pub async fn remove_module(&self, name: impl Into<String>) -> Result<(), RuntimeError> {
+        let name = name.into();
+
+        let mut modules = self.manager.modules();
+
+        if !modules.contains_key(&name) {
+            return Err(RuntimeError::MissingModule(name));
+        }
+
+        modules.remove(&name);
+        self.manager.update_modules(modules);
+
+        // Force recycle all existing workers by retaining none
+        self.inner.retain(|_, _| false);
+
+        Ok(())
+    }
+
     async fn get_worker(&self) -> Result<Object<WorkerManager>, RuntimeError> {
         self.inner.get().await.map_err(|e| match e {
             deadpool::managed::PoolError::Backend(err) => match err {
@@ -563,7 +584,7 @@ mod tests {
         "#;
 
         let pool = Pool::builder()
-            .max_size(2)
+            .max_size(3)
             .add_module("versioned", initial_code.to_string())
             .build()
             .await
@@ -1283,5 +1304,79 @@ mod tests {
             Ok(_) => todo!(),
             Err(e) => assert!(matches!(e, RuntimeError::InitTimeout)),
         }
+    }
+
+    #[tokio::test]
+    async fn test_pool_remove_module() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let code2 = r#"
+            function add(a, b) { return a + b; }
+            export default { add };
+        "#;
+
+        let code1 = r#"
+            function getValue() { return 100; }
+            export default { getValue };
+        "#;
+
+        let pool = Pool::builder()
+            .max_size(2)
+            .add_module("module2", code2.to_string())
+            .add_module("module1", code1.to_string())
+            .build()
+            .await
+            .unwrap();
+
+        let result1: i32 = pool
+            .exec("module1", "getValue", (), ExecOptions::new())
+            .await
+            .unwrap();
+        assert_eq!(result1, 100);
+
+        let result2: i32 = pool
+            .exec("module2", "add", (5, 3), ExecOptions::new())
+            .await
+            .unwrap();
+        assert_eq!(result2, 8);
+
+        pool.remove_module("module1").await.unwrap();
+
+        let modules = pool.manager.modules();
+        assert!(
+            !modules.contains_key("module1"),
+            "Module should be removed from manager"
+        );
+        assert!(
+            modules.contains_key("module2"),
+            "Module2 should still be in manager"
+        );
+
+        let result2: i32 = pool
+            .exec("module2", "add", (10, 5), ExecOptions::new())
+            .await
+            .unwrap();
+        assert_eq!(result2, 15);
+
+        let result2: Result<i32, RuntimeError> = pool
+            .exec("module1", "getValue", (10, 5), ExecOptions::new())
+            .await;
+
+        assert!(result2.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_pool_remove_nonexistent_module() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let pool = Pool::builder().max_size(2).build().await.unwrap();
+
+        // Removing a module that doesn't exist should fail
+        let result = pool.remove_module("nonexistent").await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RuntimeError::MissingModule(name) if name == "nonexistent"
+        ));
     }
 }

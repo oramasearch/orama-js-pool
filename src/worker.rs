@@ -81,6 +81,21 @@ impl Worker {
         Ok(())
     }
 
+    /// Remove a module from this worker and recreate the runtime
+    /// This helps free memory by recreating the runtime without the removed module
+    pub async fn remove_module(&mut self, name: &str) -> Result<(), RuntimeError> {
+        if !self.modules.contains_key(name) {
+            return Err(RuntimeError::MissingModule(name.to_string()));
+        }
+
+        self.modules.remove(name);
+
+        // Rebuild the runtime to recreate it without the new module
+        self.rebuild_runtime().await?;
+
+        Ok(())
+    }
+
     /// Execute a function in a module
     pub async fn exec<Input, Output>(
         &mut self,
@@ -535,5 +550,71 @@ mod tests {
             matches!(result.unwrap_err(), RuntimeError::InvalidModuleName(_, _)),
             "Should return InvalidModuleName error"
         );
+    }
+
+    #[tokio::test]
+    async fn test_remove_module() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let code1 = r#"
+            function getValue() { return 42; }
+            export default { getValue };
+        "#;
+
+        let code2 = r#"
+            function add(a, b) { return a + b; }
+            export default { add };
+        "#;
+
+        let mut worker = Worker::builder()
+            .add_module("module1", code1.to_string())
+            .add_module("module2", code2.to_string())
+            .build()
+            .await
+            .unwrap();
+
+        let result1: i32 = worker
+            .exec("module1", "getValue", (), ExecOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(result1, 42);
+
+        let result2: i32 = worker
+            .exec("module2", "add", (5, 3), ExecOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(result2, 8);
+
+        worker.remove_module("module1").await.unwrap();
+
+        let result: Result<i32, RuntimeError> = worker
+            .exec("module1", "getValue", (), ExecOptions::default())
+            .await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RuntimeError::MissingModule(name) if name == "module1"
+        ));
+
+        let result2: i32 = worker
+            .exec("module2", "add", (10, 5), ExecOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(result2, 15);
+    }
+
+    #[tokio::test]
+    async fn test_remove_nonexistent_module() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let mut worker = Worker::builder().build().await.unwrap();
+
+        // Removing a module that doesn't exist should fail
+        let result = worker.remove_module("nonexistent").await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RuntimeError::MissingModule(name) if name == "nonexistent"
+        ));
     }
 }
