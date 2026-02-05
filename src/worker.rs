@@ -26,6 +26,8 @@ pub struct Worker {
     cache: SharedCache,
     domain_permission: DomainPermission,
     evaluation_timeout: std::time::Duration,
+    max_executions: Option<u64>,
+    execution_count: u64,
 }
 
 impl Worker {
@@ -34,6 +36,7 @@ impl Worker {
         cache: SharedCache,
         domain_permission: DomainPermission,
         evaluation_timeout: std::time::Duration,
+        max_executions: Option<u64>,
     ) -> Self {
         Self {
             runtime: None,
@@ -41,6 +44,8 @@ impl Worker {
             cache,
             domain_permission,
             evaluation_timeout,
+            max_executions,
+            execution_count: 0,
         }
     }
 
@@ -85,6 +90,18 @@ impl Worker {
             return Err(RuntimeError::MissingModule(module_name.to_string()));
         }
 
+        // Check if we need to invalidate the runtime due to execution limit
+        if let Some(max_executions) = self.max_executions {
+            if self.execution_count >= max_executions {
+                warn!(
+                    "Worker reached max executions limit ({}), invalidating runtime",
+                    max_executions
+                );
+                self.runtime = None;
+                self.execution_count = 0;
+            }
+        }
+
         let domain_permission = exec_options
             .domain_permission
             .unwrap_or_else(|| self.domain_permission.clone());
@@ -104,6 +121,8 @@ impl Worker {
                 exec_options.timeout,
             )
             .await?;
+
+        self.execution_count += 1;
 
         let output: Output = serde_json::from_value(result)?;
         Ok(output)
@@ -158,6 +177,7 @@ pub struct WorkerBuilder {
     cache: Option<SharedCache>,
     domain_permission: Option<DomainPermission>,
     evaluation_timeout: Option<std::time::Duration>,
+    max_executions: Option<u64>,
 }
 
 impl WorkerBuilder {
@@ -168,6 +188,7 @@ impl WorkerBuilder {
             cache: None,
             domain_permission: None,
             evaluation_timeout: None,
+            max_executions: None,
         }
     }
 
@@ -200,6 +221,13 @@ impl WorkerBuilder {
         self
     }
 
+    /// Set the maximum number of executions before recycling the runtime
+    /// to prevent memory leaks from accumulated module cache.
+    pub fn with_max_executions(mut self, max: u64) -> Self {
+        self.max_executions = Some(max);
+        self
+    }
+
     /// Build the worker
     pub async fn build(self) -> Result<Worker, RuntimeError> {
         let cache = self.cache.unwrap_or_default();
@@ -208,7 +236,12 @@ impl WorkerBuilder {
             .evaluation_timeout
             .unwrap_or(std::time::Duration::from_secs(5));
 
-        let mut worker = Worker::new(cache, domain_permission, evaluation_timeout);
+        let mut worker = Worker::new(
+            cache,
+            domain_permission,
+            evaluation_timeout,
+            self.max_executions,
+        );
 
         for (name, code) in self.modules {
             worker.add_module(name, code).await?;
@@ -350,5 +383,56 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result, 100, "Function should return overridden value");
+    }
+
+    #[tokio::test]
+    async fn test_max_executions() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let counter_code = r#"
+            let callCount = 0;
+            function increment() {
+                callCount++;
+                return callCount;
+            }
+            export default { increment };
+        "#;
+
+        let mut worker = Worker::builder()
+            .add_module("counter", counter_code.to_string())
+            .with_max_executions(3)
+            .build()
+            .await
+            .unwrap();
+
+        // First 3 executions should increment the counter
+        let result1: i32 = worker
+            .exec("counter", "increment", (), ExecOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(result1, 1);
+
+        let result2: i32 = worker
+            .exec("counter", "increment", (), ExecOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(result2, 2);
+
+        let result3: i32 = worker
+            .exec("counter", "increment", (), ExecOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(result3, 3);
+
+        // After 3 executions, the runtime should be recycled
+        // and the counter should reset to 1
+        let result4: i32 = worker
+            .exec("counter", "increment", (), ExecOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            result4, 1,
+            "Counter should reset after max_executions is reached"
+        );
     }
 }

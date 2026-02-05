@@ -65,6 +65,7 @@ pub struct WorkerOptions {
     pub evaluation_timeout: Duration,
     pub domain_permission: DomainPermission,
     pub recycle_policy: RecyclePolicy,
+    pub max_executions: Option<u64>,
 }
 
 impl WorkerOptions {
@@ -86,6 +87,11 @@ impl WorkerOptions {
         self.recycle_policy = policy;
         self
     }
+
+    pub fn with_max_executions(mut self, max: u64) -> Self {
+        self.max_executions = Some(max);
+        self
+    }
 }
 
 impl Default for WorkerOptions {
@@ -94,6 +100,7 @@ impl Default for WorkerOptions {
             evaluation_timeout: Duration::from_secs(5),
             domain_permission: DomainPermission::DenyAll,
             recycle_policy: RecyclePolicy::default(),
+            max_executions: None,
         }
     }
 }

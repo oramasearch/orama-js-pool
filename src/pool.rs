@@ -122,6 +122,7 @@ pub struct PoolBuilder {
     domain_permission: Option<DomainPermission>,
     evaluation_timeout: Option<std::time::Duration>,
     recycle_policy: Option<RecyclePolicy>,
+    max_executions: Option<u64>,
 }
 
 impl PoolBuilder {
@@ -133,6 +134,7 @@ impl PoolBuilder {
             domain_permission: None,
             evaluation_timeout: None,
             recycle_policy: None,
+            max_executions: Some(100),
         }
     }
 
@@ -160,6 +162,13 @@ impl PoolBuilder {
         self
     }
 
+    /// Set the maximum number of executions before recycling the runtime
+    /// to prevent memory leaks from accumulated module cache.
+    pub fn with_max_executions(mut self, max: u64) -> Self {
+        self.max_executions = Some(max);
+        self
+    }
+
     /// Add a module to be loaded in all workers
     pub fn add_module<Code: Into<ModuleCodeString>>(
         mut self,
@@ -184,6 +193,7 @@ impl PoolBuilder {
             evaluation_timeout: self.evaluation_timeout.unwrap_or(Duration::from_secs(5)),
             domain_permission: self.domain_permission.unwrap_or_default(),
             recycle_policy: self.recycle_policy.unwrap_or_default(),
+            max_executions: self.max_executions,
         };
 
         // Validate that all modules can be loaded within the evaluation timeout
