@@ -27,6 +27,7 @@ pub struct Worker {
     cache: SharedCache,
     domain_permission: DomainPermission,
     evaluation_timeout: std::time::Duration,
+    execution_timeout: std::time::Duration,
     max_executions: MaxExecutions,
     execution_count: u64,
     version: u64,
@@ -38,6 +39,7 @@ impl Worker {
         cache: SharedCache,
         domain_permission: DomainPermission,
         evaluation_timeout: std::time::Duration,
+        execution_timeout: std::time::Duration,
         max_executions: MaxExecutions,
         version: u64,
     ) -> Self {
@@ -47,6 +49,7 @@ impl Worker {
             cache,
             domain_permission,
             evaluation_timeout,
+            execution_timeout,
             max_executions,
             execution_count: 0,
             version,
@@ -131,6 +134,8 @@ impl Worker {
             .domain_permission
             .unwrap_or_else(|| self.domain_permission.clone());
 
+        let timeout = exec_options.timeout.unwrap_or(self.execution_timeout);
+
         let runtime = self.get_runtime().await?;
 
         let params_tuple = params.try_into_function_parameter()?;
@@ -143,7 +148,7 @@ impl Worker {
                 params_value,
                 exec_options.stdout_sender,
                 domain_permission,
-                exec_options.timeout,
+                timeout,
             )
             .await?;
 
@@ -203,6 +208,7 @@ pub struct WorkerBuilder {
     cache: Option<SharedCache>,
     domain_permission: Option<DomainPermission>,
     evaluation_timeout: Option<std::time::Duration>,
+    execution_timeout: Option<std::time::Duration>,
     max_executions: MaxExecutions,
     version: u64,
 }
@@ -215,6 +221,7 @@ impl WorkerBuilder {
             cache: None,
             domain_permission: None,
             evaluation_timeout: None,
+            execution_timeout: None,
             max_executions: MaxExecutions::default(),
             version: 0,
         }
@@ -249,6 +256,12 @@ impl WorkerBuilder {
         self
     }
 
+    /// Set the execution timeout for function execution
+    pub fn with_execution_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.execution_timeout = Some(timeout);
+        self
+    }
+
     /// Set the maximum number of executions before recycling the runtime.
     pub fn with_max_executions(mut self, max: MaxExecutions) -> Self {
         self.max_executions = max;
@@ -268,11 +281,15 @@ impl WorkerBuilder {
         let evaluation_timeout = self
             .evaluation_timeout
             .unwrap_or(std::time::Duration::from_secs(5));
+        let execution_timeout = self
+            .execution_timeout
+            .unwrap_or(std::time::Duration::from_secs(30));
 
         let mut worker = Worker::new(
             cache,
             domain_permission,
             evaluation_timeout,
+            execution_timeout,
             self.max_executions,
             self.version,
         );
@@ -677,5 +694,56 @@ mod tests {
             .exec("test", "noReturn", (), ExecOptions::default())
             .await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_worker_execution_timeout_priority() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let slow_code = r#"
+            async function slowCode(delay) {
+                await new Promise(resolve => setTimeout(resolve, delay));
+                return "completed";
+            }
+            export default { slowCode };
+        "#;
+
+        // Worker has 5 second timeout
+        let mut worker = Worker::builder()
+            .with_execution_timeout(Duration::from_secs(5))
+            .add_module("slow", slow_code.to_string())
+            .build()
+            .await
+            .unwrap();
+
+        // Case 1: No ExecOptions timeout - uses worker timeout (5 seconds)
+        let result: String = worker
+            .exec("slow", "slowCode", 100, ExecOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(result, "completed");
+
+        // Case 2: ExecOptions timeout set - overrides worker timeout
+        let result: Result<String, RuntimeError> = worker
+            .exec(
+                "slow",
+                "slowCode",
+                200,
+                ExecOptions::default().with_timeout(Duration::from_millis(50)),
+            )
+            .await;
+        assert!(matches!(result.unwrap_err(), RuntimeError::ExecTimeout));
+
+        // Case 3: ExecOptions with longer timeout - overrides worker timeout
+        let result: String = worker
+            .exec(
+                "slow",
+                "slowCode",
+                1000,
+                ExecOptions::default().with_timeout(Duration::from_secs(3)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result, "completed");
     }
 }

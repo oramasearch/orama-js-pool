@@ -26,6 +26,7 @@ async fn main() -> Result<(), RuntimeError> {
     let pool = Pool::builder()
         .max_size(10) // number of workers in the pool
         .with_evaluation_timeout(Duration::from_millis(200)) // module load timeout
+        .with_execution_timeout(Duration::from_secs(30)) // default execution timeout
         .add_module("async_calculator", CODE_ASYNC_SUM.to_string())
         .build()
         .await?;
@@ -36,7 +37,7 @@ async fn main() -> Result<(), RuntimeError> {
             "async_calculator", // module name
             "async_sum",        // function name
             params,             // input parameters
-            ExecOptions::new().with_timeout(Duration::from_millis(200)),
+            ExecOptions::new().with_timeout(Duration::from_millis(200)), // override pool timeout
         )
         .await?;
 
@@ -55,18 +56,20 @@ Main entry point. Manages a pool of JS workers, each with loaded modules.
 
 - `Pool::builder()` — creates a new pool builder
 - `PoolBuilder::max_size(n)` — sets worker pool size
-- `PoolBuilder::with_evaluation_timeout(duration)` — module load timeout
+- `PoolBuilder::with_evaluation_timeout(duration)` — module load timeout (default: 5 seconds)
+- `PoolBuilder::with_execution_timeout(duration)` — default execution timeout for all workers (default: 30 seconds)
 - `PoolBuilder::with_max_executions(limit)` — recycle workers after n executions (prevents memory leaks)
+- `PoolBuilder::with_domain_permission(permission)` — restrict network access at pool level
 - `PoolBuilder::add_module(name, code)` — loads a module into all workers
 - `exec(module_name, function_name, params, ExecOptions)` — executes a function
 
 ### `ExecOptions`
 
-Per-execution configuration:
+Per-execution configuration (all optional, overrides pool defaults):
 
-- `with_timeout(duration)`: Maximum execution time
-- `with_allowed_hosts(hosts)`: Restrict HTTP access
-- `with_stdout_stream(sender)`: Capture console.log/error output
+- `with_timeout(duration)`: Override pool execution timeout for this specific call
+- `with_domain_permission(permission)`: Override pool domain permission for this specific call
+- `with_stdout_sender(sender)`: Capture console.log/error output
 
 ### `RuntimeError`
 
@@ -76,9 +79,12 @@ All errors (startup, execution, JS exceptions) are reported as `RuntimeError`.
 
 - **Parallel execution**: Multiple requests handled concurrently
 - **Async and sync JS support**: Run both types of JS functions
-- **Sandboxing**: Restrict network access via `allowed_hosts`
-- **Timeouts**: Prevent runaway scripts
+- **Sandboxing**: Restrict network access via domain permissions (allow/deny lists)
+- **Flexible timeouts**: Set default timeouts at pool level, override per execution
+  - `evaluation_timeout`: Controls how long module loading can take (default: 5s)
+  - `execution_timeout`: Controls how long function execution can take (default: 30s)
 - **Typed input/output**: Use Rust types for parameters and results (via serde)
+- **Worker recycling**: Prevent memory leaks with configurable max executions per worker
 
 ## Example: Streaming (if supported)
 

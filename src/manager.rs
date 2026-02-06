@@ -97,6 +97,7 @@ impl Manager for WorkerManager {
                 .with_cache(cache)
                 .with_domain_permission(worker_options.domain_permission)
                 .with_evaluation_timeout(worker_options.evaluation_timeout)
+                .with_execution_timeout(worker_options.execution_timeout)
                 .with_max_executions(worker_options.max_executions)
                 .with_version(version);
 

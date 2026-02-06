@@ -45,9 +45,9 @@ pub enum RecyclePolicy {
     OnTimeoutOrError,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ExecOptions {
-    pub timeout: Duration,
+    pub timeout: Option<Duration>,
     pub domain_permission: Option<DomainPermission>,
     pub stdout_sender: Option<Arc<tokio::sync::broadcast::Sender<(OutputChannel, String)>>>,
 }
@@ -58,7 +58,7 @@ impl ExecOptions {
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
+        self.timeout = Some(timeout);
         self
     }
 
@@ -76,20 +76,11 @@ impl ExecOptions {
     }
 }
 
-impl Default for ExecOptions {
-    fn default() -> Self {
-        Self {
-            timeout: Duration::from_secs(30),
-            domain_permission: None,
-            stdout_sender: None,
-        }
-    }
-}
-
 /// Worker-level options that apply to all modules in a worker
 #[derive(Debug, Clone)]
 pub struct WorkerOptions {
     pub evaluation_timeout: Duration,
+    pub execution_timeout: Duration,
     pub domain_permission: DomainPermission,
     pub recycle_policy: RecyclePolicy,
     pub max_executions: MaxExecutions,
@@ -102,6 +93,11 @@ impl WorkerOptions {
 
     pub fn with_evaluation_timeout(mut self, timeout: Duration) -> Self {
         self.evaluation_timeout = timeout;
+        self
+    }
+
+    pub fn with_execution_timeout(mut self, timeout: Duration) -> Self {
+        self.execution_timeout = timeout;
         self
     }
 
@@ -125,6 +121,7 @@ impl Default for WorkerOptions {
     fn default() -> Self {
         Self {
             evaluation_timeout: Duration::from_secs(5),
+            execution_timeout: Duration::from_secs(30),
             domain_permission: DomainPermission::DenyAll,
             recycle_policy: RecyclePolicy::default(),
             max_executions: MaxExecutions::default(),

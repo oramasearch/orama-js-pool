@@ -137,6 +137,7 @@ pub struct PoolBuilder {
     max_size: usize,
     domain_permission: Option<DomainPermission>,
     evaluation_timeout: Option<std::time::Duration>,
+    execution_timeout: Option<std::time::Duration>,
     recycle_policy: Option<RecyclePolicy>,
     max_executions: Option<MaxExecutions>,
 }
@@ -149,6 +150,7 @@ impl PoolBuilder {
             max_size: 10,
             domain_permission: None,
             evaluation_timeout: None,
+            execution_timeout: None,
             recycle_policy: None,
             max_executions: None,
         }
@@ -163,6 +165,12 @@ impl PoolBuilder {
     /// Set the evaluation timeout for module loading in all workers
     pub fn with_evaluation_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.evaluation_timeout = Some(timeout);
+        self
+    }
+
+    /// Set the execution timeout for function execution in all workers
+    pub fn with_execution_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.execution_timeout = Some(timeout);
         self
     }
 
@@ -206,6 +214,7 @@ impl PoolBuilder {
 
         let worker_options = WorkerOptions {
             evaluation_timeout: self.evaluation_timeout.unwrap_or(Duration::from_secs(5)),
+            execution_timeout: self.execution_timeout.unwrap_or(Duration::from_secs(30)),
             domain_permission: self.domain_permission.unwrap_or_default(),
             recycle_policy: self.recycle_policy.unwrap_or_default(),
             max_executions: self.max_executions.unwrap_or_default(),
@@ -1519,5 +1528,57 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result5, 2);
+    }
+
+    #[tokio::test]
+    async fn test_pool_execution_timeout_priority() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let slow_code = r#"
+            async function slowCode(delay) {
+                await new Promise(resolve => setTimeout(resolve, delay));
+                return "completed";
+            }
+            export default { slowCode };
+        "#;
+
+        // Pool has 5 second timeout
+        let pool = Pool::builder()
+            .max_size(2)
+            .with_execution_timeout(Duration::from_secs(2))
+            .add_module("slow", slow_code.to_string())
+            .build()
+            .await
+            .unwrap();
+
+        // Case 1: No ExecOptions timeout - uses pool timeout (5 seconds)
+        let result: String = pool
+            .exec("slow", "slowCode", 100, ExecOptions::new())
+            .await
+            .unwrap();
+        assert_eq!(result, "completed");
+
+        // Case 2: ExecOptions timeout set - overrides pool timeout
+        let result: Result<String, RuntimeError> = pool
+            .exec(
+                "slow",
+                "slowCode",
+                200,
+                ExecOptions::new().with_timeout(Duration::from_millis(50)),
+            )
+            .await;
+        assert!(matches!(result.unwrap_err(), RuntimeError::ExecTimeout));
+
+        // Case 3: ExecOptions with longer timeout - overrides pool timeout
+        let result: String = pool
+            .exec(
+                "slow",
+                "slowCode",
+                2500,
+                ExecOptions::new().with_timeout(Duration::from_secs(3)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result, "completed");
     }
 }
