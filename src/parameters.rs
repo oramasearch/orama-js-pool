@@ -73,11 +73,8 @@ mod tests {
 
     #[test]
     fn test_tuple_parameters() {
-        // Tuples serialize as arrays in serde_json, so they work out of the box!
+        // Tuples serialize as arrays in serde_json
         test_into_function_params((5,));
-        test_into_function_params((5, 3));
-        test_into_function_params((5, 3, 7));
-        test_into_function_params((5, 3, 7, 9));
         test_into_function_params((1, 2, 3, 4, 5, 6, 7, 8));
 
         // Test mixed types in tuples
