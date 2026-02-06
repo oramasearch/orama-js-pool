@@ -628,4 +628,54 @@ mod tests {
             RuntimeError::MissingModule(name) if name == "nonexistent"
         ));
     }
+
+    #[tokio::test]
+    async fn test_function_without_return() {
+        let code = r#"
+            function noReturn() {}
+            function explicitUndefined() { return undefined; }
+            function explicitNull() { return null; }
+            export default { noReturn, explicitUndefined, explicitNull };
+        "#;
+
+        let mut worker = Worker::builder()
+            .add_module("test", code.to_string())
+            .build()
+            .await
+            .unwrap();
+
+        let result: serde_json::Value = worker
+            .exec("test", "noReturn", (), ExecOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(result, serde_json::Value::Null);
+
+        let result: serde_json::Value = worker
+            .exec("test", "explicitUndefined", (), ExecOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(result, serde_json::Value::Null);
+
+        let result: serde_json::Value = worker
+            .exec("test", "explicitNull", (), ExecOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(result, serde_json::Value::Null);
+
+        let result: Option<i32> = worker
+            .exec("test", "noReturn", (), ExecOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(result, None);
+
+        let result: Result<String, RuntimeError> = worker
+            .exec("test", "noReturn", (), ExecOptions::default())
+            .await;
+        assert!(result.is_err());
+
+        let result: Result<i32, RuntimeError> = worker
+            .exec("test", "noReturn", (), ExecOptions::default())
+            .await;
+        assert!(result.is_err());
+    }
 }
