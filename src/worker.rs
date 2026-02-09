@@ -697,6 +697,152 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_domain_permission_deny_ip_wildcard() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let fetch_code = r#"
+            async function fetchUrl(url) {
+                // Don't catch errors - let them propagate to Rust
+                const res = await fetch(url);
+                return { success: true, status: res.status };
+            }
+            export default { fetchUrl };
+        "#;
+
+        let mut worker = Worker::builder()
+            .with_domain_permission(DomainPermission::Deny(vec![
+                "10.0.0.*".to_string(),
+                "192.168.*.*".to_string(),
+            ]))
+            .add_module("fetch_test", fetch_code.to_string())
+            .build()
+            .await
+            .unwrap();
+
+        // Test that 10.0.0.* is blocked
+        let result: Result<serde_json::Value, RuntimeError> = worker
+            .exec(
+                "fetch_test",
+                "fetchUrl",
+                &"http://10.0.0.1/test",
+                ExecOptions::default(),
+            )
+            .await;
+
+        assert!(result.is_err(), "Should block fetch to 10.0.0.1");
+        match result.unwrap_err() {
+            RuntimeError::NetworkPermissionDenied(msg) => {
+                assert!(msg.contains("Domain not allowed"));
+                assert!(msg.contains("10.0.0.1"));
+            }
+            e => panic!("Expected NetworkPermissionDenied, got: {e:?}"),
+        }
+
+        // Test that 192.168.*.* is blocked
+        let result: Result<serde_json::Value, RuntimeError> = worker
+            .exec(
+                "fetch_test",
+                "fetchUrl",
+                &"http://192.168.1.100/test",
+                ExecOptions::default(),
+            )
+            .await;
+
+        assert!(result.is_err(), "Should block fetch to 192.168.1.100");
+
+        // We just want to verify it's not blocked by permission
+        let result: Result<serde_json::Value, RuntimeError> = worker
+            .exec(
+                "fetch_test",
+                "fetchUrl",
+                &"http://10.0.1.1/test",
+                ExecOptions::default(),
+            )
+            .await;
+
+        // Should not fail with NetworkPermissionDenied
+        // It might fail with other errors (connection refused, etc.)
+        if let Err(RuntimeError::NetworkPermissionDenied(_)) = result {
+            panic!("Should not block 10.0.1.1 - it's not in deny list");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_domain_permission_allow_ip_wildcard() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let fetch_code = r#"
+            async function fetchUrl(url) {
+                // Don't catch errors - let them propagate to Rust
+                const res = await fetch(url);
+                return { success: true, status: res.status };
+            }
+            export default { fetchUrl };
+        "#;
+
+        let mut worker = Worker::builder()
+            .with_domain_permission(DomainPermission::Allow(vec!["10.0.0.*".to_string()]))
+            .add_module("fetch_test", fetch_code.to_string())
+            .build()
+            .await
+            .unwrap();
+
+        // Test that only 10.0.0.* is allowed
+        // Other IPs should be blocked
+        let result: Result<serde_json::Value, RuntimeError> = worker
+            .exec(
+                "fetch_test",
+                "fetchUrl",
+                &"http://192.168.1.1/test",
+                ExecOptions::default(),
+            )
+            .await;
+
+        assert!(
+            result.is_err(),
+            "Should block fetch to 192.168.1.1 (not in allow list)"
+        );
+        match result.unwrap_err() {
+            RuntimeError::NetworkPermissionDenied(msg) => {
+                assert!(msg.contains("Domain not allowed"));
+            }
+            e => panic!("Expected NetworkPermissionDenied, got: {e:?}"),
+        }
+
+        // Test that IPs outside range are blocked
+        let result: Result<serde_json::Value, RuntimeError> = worker
+            .exec(
+                "fetch_test",
+                "fetchUrl",
+                &"http://8.8.8.8/test",
+                ExecOptions::default(),
+            )
+            .await;
+
+        assert!(result.is_err(), "Should block fetch to 8.8.8.8");
+        match result.unwrap_err() {
+            RuntimeError::NetworkPermissionDenied(msg) => {
+                assert!(msg.contains("Domain not allowed"));
+            }
+            e => panic!("Expected NetworkPermissionDenied, got: {e:?}"),
+        }
+
+        // Verify that allowed IPs are not blocked by permission
+        let result: Result<serde_json::Value, RuntimeError> = worker
+            .exec(
+                "fetch_test",
+                "fetchUrl",
+                &"http://10.0.0.1/test",
+                ExecOptions::default(),
+            )
+            .await;
+
+        if let Err(RuntimeError::NetworkPermissionDenied(_)) = result {
+            panic!("Should not block 10.0.0.1 - it's in the allow list");
+        }
+    }
+
+    #[tokio::test]
     async fn test_worker_execution_timeout_priority() {
         let _ = tracing_subscriber::fmt::try_init();
 
