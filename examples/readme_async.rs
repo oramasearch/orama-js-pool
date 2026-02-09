@@ -24,7 +24,7 @@ async fn main() -> Result<(), RuntimeError> {
         .exec(
             "async_calculator", // module name
             "async_sum",        // function name
-            params,             // input parameters
+            &params,            // input parameters
             ExecOptions::new().with_timeout(Duration::from_millis(200)),
         )
         .await?;

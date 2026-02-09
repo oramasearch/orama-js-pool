@@ -29,7 +29,7 @@ async fn main() -> Result<(), RuntimeError> {
         .exec(
             "openai",      // module name
             "getResponse", // function name
-            params,
+            &params,
             ExecOptions::new().with_timeout(Duration::from_secs(5)),
         )
         .await?;

@@ -35,11 +35,11 @@ impl Pool {
         &self,
         module_name: &str,
         function_name: &str,
-        params: Input,
+        params: &Input,
         exec_options: ExecOptions,
     ) -> Result<Output, RuntimeError>
     where
-        Input: TryIntoFunctionParameters + Send + 'static,
+        Input: TryIntoFunctionParameters + Send + Sync + 'static + ?Sized,
         Output: DeserializeOwned + Send + 'static,
     {
         let mut worker = self.get_worker().await?;
@@ -283,7 +283,7 @@ mod tests {
             .unwrap();
 
         let result: i32 = pool
-            .exec("math", "add", (5, 3), ExecOptions::new())
+            .exec("math", "add", &(5, 3), ExecOptions::new())
             .await
             .unwrap_or_else(|e| panic!("Execution failed: {e:?}"));
 
@@ -316,7 +316,7 @@ mod tests {
             .exec(
                 "add",
                 "add",
-                vec![serde_json::json!(5), serde_json::json!(3)],
+                &vec![serde_json::json!(5), serde_json::json!(3)],
                 ExecOptions::new(),
             )
             .await
@@ -326,7 +326,7 @@ mod tests {
             .exec(
                 "multiply",
                 "multiply",
-                vec![serde_json::json!(5), serde_json::json!(3)],
+                &vec![serde_json::json!(5), serde_json::json!(3)],
                 ExecOptions::new(),
             )
             .await
@@ -356,7 +356,7 @@ mod tests {
             .exec(
                 "missingModuleTest",
                 "add",
-                vec![serde_json::json!(5), serde_json::json!(3)],
+                &vec![serde_json::json!(5), serde_json::json!(3)],
                 ExecOptions::new(),
             )
             .await;
@@ -365,7 +365,7 @@ mod tests {
             .exec(
                 "add",
                 "missingFunctionTest",
-                vec![serde_json::json!(5), serde_json::json!(3)],
+                &vec![serde_json::json!(5), serde_json::json!(3)],
                 ExecOptions::new(),
             )
             .await;
@@ -418,7 +418,7 @@ mod tests {
             .exec(
                 "subtract",
                 "subtract",
-                vec![serde_json::json!(10), serde_json::json!(3)],
+                &vec![serde_json::json!(10), serde_json::json!(3)],
                 ExecOptions::new(),
             )
             .await
@@ -452,7 +452,7 @@ mod tests {
             .exec(
                 "math_utils",
                 "add",
-                vec![serde_json::json!(10), serde_json::json!(5)],
+                &vec![serde_json::json!(10), serde_json::json!(5)],
                 ExecOptions::new(),
             )
             .await
@@ -462,7 +462,7 @@ mod tests {
             .exec(
                 "math_utils",
                 "subtract",
-                vec![serde_json::json!(10), serde_json::json!(5)],
+                &vec![serde_json::json!(10), serde_json::json!(5)],
                 ExecOptions::new(),
             )
             .await
@@ -472,7 +472,7 @@ mod tests {
             .exec(
                 "math_utils",
                 "multiply",
-                vec![serde_json::json!(10), serde_json::json!(5)],
+                &vec![serde_json::json!(10), serde_json::json!(5)],
                 ExecOptions::new(),
             )
             .await
@@ -482,7 +482,7 @@ mod tests {
             .exec(
                 "math_utils",
                 "divide",
-                vec![serde_json::json!(10), serde_json::json!(5)],
+                &vec![serde_json::json!(10), serde_json::json!(5)],
                 ExecOptions::new(),
             )
             .await
@@ -524,7 +524,7 @@ mod tests {
             .exec(
                 "mixed",
                 "syncAdd",
-                vec![serde_json::json!(5), serde_json::json!(3)],
+                &vec![serde_json::json!(5), serde_json::json!(3)],
                 ExecOptions::new(),
             )
             .await
@@ -534,7 +534,7 @@ mod tests {
             .exec(
                 "mixed",
                 "asyncMultiply",
-                vec![serde_json::json!(5), serde_json::json!(3)],
+                &vec![serde_json::json!(5), serde_json::json!(3)],
                 ExecOptions::new(),
             )
             .await
@@ -568,7 +568,7 @@ mod tests {
         // Execute multiple times to test the cache across workers
         for i in 1..=10 {
             let result: i32 = pool
-                .exec("counter", "increment", (), ExecOptions::new())
+                .exec("counter", "increment", &(), ExecOptions::new())
                 .await
                 .unwrap();
             assert_eq!(result, i);
@@ -594,7 +594,7 @@ mod tests {
             .unwrap();
 
         let result1: i32 = pool
-            .exec("versioned", "getValue", (), ExecOptions::new())
+            .exec("versioned", "getValue", &(), ExecOptions::new())
             .await
             .unwrap();
         assert_eq!(result1, 100);
@@ -613,7 +613,7 @@ mod tests {
 
         // Execute with updated code, this should use a new worker or recycled worker
         let result2: i32 = pool
-            .exec("versioned", "getValue", (), ExecOptions::new())
+            .exec("versioned", "getValue", &(), ExecOptions::new())
             .await
             .unwrap();
         assert_eq!(result2, 200, "Updated module should return new value");
@@ -635,7 +635,7 @@ mod tests {
             let pool_clone = pool.clone();
             let handle = tokio::spawn(async move {
                 let result: i32 = pool_clone
-                    .exec("versioned", "getValue", (), ExecOptions::new())
+                    .exec("versioned", "getValue", &(), ExecOptions::new())
                     .await
                     .unwrap();
                 result
@@ -675,7 +675,7 @@ mod tests {
             let pool_clone = pool.clone();
             let handle = tokio::spawn(async move {
                 let result: i32 = pool_clone
-                    .exec("versioned", "getValue", (), ExecOptions::new())
+                    .exec("versioned", "getValue", &(), ExecOptions::new())
                     .await
                     .unwrap();
                 result
@@ -708,7 +708,7 @@ mod tests {
             let pool_clone = pool.clone();
             let handle = tokio::spawn(async move {
                 let result: i32 = pool_clone
-                    .exec("versioned", "getValue", (), ExecOptions::new())
+                    .exec("versioned", "getValue", &(), ExecOptions::new())
                     .await
                     .unwrap();
                 result
@@ -1012,7 +1012,7 @@ mod tests {
             .exec(
                 "slow",
                 "slowCode",
-                (),
+                &(),
                 ExecOptions::new().with_timeout(Duration::from_millis(10)),
             )
             .await;
@@ -1106,7 +1106,7 @@ mod tests {
             .exec(
                 "logger",
                 "logAndReturn",
-                5,
+                &5,
                 ExecOptions::new()
                     .with_timeout(Duration::from_millis(100))
                     .with_stdout_sender(std::sync::Arc::new(sender)),
@@ -1152,18 +1152,18 @@ mod tests {
             .unwrap();
 
         let result1: i32 = pool
-            .exec("error_test", "maybeError", false, ExecOptions::new())
+            .exec("error_test", "maybeError", &false, ExecOptions::new())
             .await
             .unwrap();
         assert_eq!(result1, 1);
 
         let result2: Result<i32, RuntimeError> = pool
-            .exec("error_test", "maybeError", true, ExecOptions::new())
+            .exec("error_test", "maybeError", &true, ExecOptions::new())
             .await;
         assert!(result2.is_err());
 
         let result3: i32 = pool
-            .exec("error_test", "maybeError", false, ExecOptions::new())
+            .exec("error_test", "maybeError", &false, ExecOptions::new())
             .await
             .unwrap();
         assert_eq!(result3, 2, "Runtime should have been recycled after error");
@@ -1195,20 +1195,20 @@ mod tests {
 
         // First call - should succeed
         let result1: i32 = pool
-            .exec("error_test", "maybeError", false, ExecOptions::new())
+            .exec("error_test", "maybeError", &false, ExecOptions::new())
             .await
             .unwrap();
         assert_eq!(result1, 1);
 
         // Second call with error - should fail
         let result2: Result<i32, RuntimeError> = pool
-            .exec("error_test", "maybeError", true, ExecOptions::new())
+            .exec("error_test", "maybeError", &true, ExecOptions::new())
             .await;
         assert!(result2.is_err());
 
         // Third call - should succeed with fresh runtime (callCount reset to 1)
         let result3: i32 = pool
-            .exec("error_test", "maybeError", false, ExecOptions::new())
+            .exec("error_test", "maybeError", &false, ExecOptions::new())
             .await
             .unwrap();
         assert_eq!(result3, 1, "Runtime should have been recycled after error");
@@ -1239,20 +1239,20 @@ mod tests {
             .unwrap();
 
         let result: i32 = pool
-            .exec("counter", "incrementCounter", (), ExecOptions::new())
+            .exec("counter", "incrementCounter", &(), ExecOptions::new())
             .await
             .unwrap();
         assert_eq!(result, 1);
 
         // Second call should error (callCount == 2)
         let result: Result<i32, RuntimeError> = pool
-            .exec("counter", "incrementCounter", (), ExecOptions::new())
+            .exec("counter", "incrementCounter", &(), ExecOptions::new())
             .await;
         assert!(result.is_err(), "Should error on second call");
 
         // Third call should succeed with fresh runtime (callCount reset to 1)
         let result: i32 = pool
-            .exec("counter", "incrementCounter", (), ExecOptions::new())
+            .exec("counter", "incrementCounter", &(), ExecOptions::new())
             .await
             .unwrap();
         assert_eq!(result, 1, "Runtime should have been recycled after error");
@@ -1288,7 +1288,7 @@ mod tests {
             .exec(
                 "fetcher",
                 "fetchOrCount",
-                (None::<String>,),
+                &(None::<String>,),
                 ExecOptions::new(),
             )
             .await
@@ -1300,7 +1300,7 @@ mod tests {
             .exec(
                 "fetcher",
                 "fetchOrCount",
-                ("https://blocked.test",),
+                &("https://blocked.test",),
                 ExecOptions::new().with_timeout(Duration::from_secs(2)),
             )
             .await;
@@ -1318,7 +1318,7 @@ mod tests {
             .exec(
                 "fetcher",
                 "fetchOrCount",
-                (None::<String>,),
+                &(None::<String>,),
                 ExecOptions::new(),
             )
             .await
@@ -1426,13 +1426,13 @@ mod tests {
             .unwrap();
 
         let result1: i32 = pool
-            .exec("module1", "getValue", (), ExecOptions::new())
+            .exec("module1", "getValue", &(), ExecOptions::new())
             .await
             .unwrap();
         assert_eq!(result1, 100);
 
         let result2: i32 = pool
-            .exec("module2", "add", (5, 3), ExecOptions::new())
+            .exec("module2", "add", &(5, 3), ExecOptions::new())
             .await
             .unwrap();
         assert_eq!(result2, 8);
@@ -1450,13 +1450,13 @@ mod tests {
         );
 
         let result2: i32 = pool
-            .exec("module2", "add", (10, 5), ExecOptions::new())
+            .exec("module2", "add", &(10, 5), ExecOptions::new())
             .await
             .unwrap();
         assert_eq!(result2, 15);
 
         let result2: Result<i32, RuntimeError> = pool
-            .exec("module1", "getValue", (10, 5), ExecOptions::new())
+            .exec("module1", "getValue", &(10, 5), ExecOptions::new())
             .await;
 
         assert!(result2.is_err());
@@ -1500,13 +1500,13 @@ mod tests {
 
         // First 3 executions should increment the counter
         let result1: i32 = pool
-            .exec("counter", "increment", (), ExecOptions::new())
+            .exec("counter", "increment", &(), ExecOptions::new())
             .await
             .unwrap();
         assert_eq!(result1, 1);
 
         let result2: i32 = pool
-            .exec("counter", "increment", (), ExecOptions::new())
+            .exec("counter", "increment", &(), ExecOptions::new())
             .await
             .unwrap();
         assert_eq!(result2, 2);
@@ -1514,7 +1514,7 @@ mod tests {
         // After 2 executions, the worker should be recycled
         // and the counter should reset to 1
         let result4: i32 = pool
-            .exec("counter", "increment", (), ExecOptions::new())
+            .exec("counter", "increment", &(), ExecOptions::new())
             .await
             .unwrap();
         assert_eq!(
@@ -1524,7 +1524,7 @@ mod tests {
 
         // Verify it continues to work correctly after recycling
         let result5: i32 = pool
-            .exec("counter", "increment", (), ExecOptions::new())
+            .exec("counter", "increment", &(), ExecOptions::new())
             .await
             .unwrap();
         assert_eq!(result5, 2);
@@ -1553,7 +1553,7 @@ mod tests {
 
         // Case 1: No ExecOptions timeout - uses pool timeout (5 seconds)
         let result: String = pool
-            .exec("slow", "slowCode", 100, ExecOptions::new())
+            .exec("slow", "slowCode", &100, ExecOptions::new())
             .await
             .unwrap();
         assert_eq!(result, "completed");
@@ -1563,7 +1563,7 @@ mod tests {
             .exec(
                 "slow",
                 "slowCode",
-                200,
+                &200,
                 ExecOptions::new().with_timeout(Duration::from_millis(50)),
             )
             .await;
@@ -1574,7 +1574,7 @@ mod tests {
             .exec(
                 "slow",
                 "slowCode",
-                2500,
+                &2500,
                 ExecOptions::new().with_timeout(Duration::from_secs(3)),
             )
             .await

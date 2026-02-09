@@ -49,7 +49,7 @@ fn bench_worker_exec(c: &mut Criterion) {
                         .exec(
                             "benchmark",
                             "add",
-                            vec![black_box(5), black_box(10)],
+                            &vec![black_box(5), black_box(10)],
                             ExecOptions::new().with_timeout(Duration::from_secs(1)),
                         )
                         .await
@@ -101,7 +101,7 @@ fn bench_pool_execution(c: &mut Criterion) {
                         .exec(
                             "benchmark",
                             "add",
-                            vec![black_box(5), black_box(10)],
+                            &vec![black_box(5), black_box(10)],
                             ExecOptions::new().with_timeout(Duration::from_secs(1)),
                         )
                         .await

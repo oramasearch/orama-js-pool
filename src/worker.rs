@@ -112,11 +112,11 @@ impl Worker {
         &mut self,
         module_name: &str,
         function_name: &str,
-        params: Input,
+        params: &Input,
         exec_options: ExecOptions,
     ) -> Result<Output, RuntimeError>
     where
-        Input: TryIntoFunctionParameters + Send + 'static,
+        Input: TryIntoFunctionParameters + Send + Sync + 'static + ?Sized,
         Output: DeserializeOwned + Send + 'static,
     {
         if !self.modules.contains_key(module_name) {
@@ -145,7 +145,7 @@ impl Worker {
             .exec(
                 module_name,
                 function_name.to_string(),
-                params_value,
+                &params_value,
                 exec_options.stdout_sender,
                 domain_permission,
                 timeout,
@@ -418,7 +418,7 @@ mod tests {
             .unwrap();
 
         let result: i32 = worker
-            .exec("test", "getValue", (), ExecOptions::default())
+            .exec("test", "getValue", &(), ExecOptions::default())
             .await
             .unwrap();
         assert_eq!(result, 42);
@@ -430,7 +430,7 @@ mod tests {
             .unwrap();
 
         let result: i32 = worker
-            .exec("test", "getValue", (), ExecOptions::default())
+            .exec("test", "getValue", &(), ExecOptions::default())
             .await
             .unwrap();
         assert_eq!(result, 100, "Function should return overridden value");
@@ -458,19 +458,19 @@ mod tests {
 
         // First 3 executions should increment the counter
         let result1: i32 = worker
-            .exec("counter", "increment", (), ExecOptions::default())
+            .exec("counter", "increment", &(), ExecOptions::default())
             .await
             .unwrap();
         assert_eq!(result1, 1);
 
         let result2: i32 = worker
-            .exec("counter", "increment", (), ExecOptions::default())
+            .exec("counter", "increment", &(), ExecOptions::default())
             .await
             .unwrap();
         assert_eq!(result2, 2);
 
         let result3: i32 = worker
-            .exec("counter", "increment", (), ExecOptions::default())
+            .exec("counter", "increment", &(), ExecOptions::default())
             .await
             .unwrap();
         assert_eq!(result3, 3);
@@ -478,7 +478,7 @@ mod tests {
         // After 3 executions, the runtime should be recycled
         // and the counter should reset to 1
         let result4: i32 = worker
-            .exec("counter", "increment", (), ExecOptions::default())
+            .exec("counter", "increment", &(), ExecOptions::default())
             .await
             .unwrap();
         assert_eq!(
@@ -509,7 +509,7 @@ mod tests {
             .unwrap();
 
         let result: Result<i32, RuntimeError> = worker
-            .exec("test", "badFunction", (), ExecOptions::default())
+            .exec("test", "badFunction", &(), ExecOptions::default())
             .await;
 
         // Should return an error, not panic
@@ -545,7 +545,7 @@ mod tests {
             .unwrap();
 
         let result: Result<i32, RuntimeError> = worker
-            .exec("test", "throwingFunction", (), ExecOptions::default())
+            .exec("test", "throwingFunction", &(), ExecOptions::default())
             .await;
 
         // Should return an error, not panic
@@ -602,13 +602,13 @@ mod tests {
             .unwrap();
 
         let result1: i32 = worker
-            .exec("module1", "getValue", (), ExecOptions::default())
+            .exec("module1", "getValue", &(), ExecOptions::default())
             .await
             .unwrap();
         assert_eq!(result1, 42);
 
         let result2: i32 = worker
-            .exec("module2", "add", (5, 3), ExecOptions::default())
+            .exec("module2", "add", &(5, 3), ExecOptions::default())
             .await
             .unwrap();
         assert_eq!(result2, 8);
@@ -616,7 +616,7 @@ mod tests {
         worker.remove_module("module1").await.unwrap();
 
         let result: Result<i32, RuntimeError> = worker
-            .exec("module1", "getValue", (), ExecOptions::default())
+            .exec("module1", "getValue", &(), ExecOptions::default())
             .await;
         assert!(result.is_err());
         assert!(matches!(
@@ -625,7 +625,7 @@ mod tests {
         ));
 
         let result2: i32 = worker
-            .exec("module2", "add", (10, 5), ExecOptions::default())
+            .exec("module2", "add", &(10, 5), ExecOptions::default())
             .await
             .unwrap();
         assert_eq!(result2, 15);
@@ -662,36 +662,36 @@ mod tests {
             .unwrap();
 
         let result: serde_json::Value = worker
-            .exec("test", "noReturn", (), ExecOptions::default())
+            .exec("test", "noReturn", &(), ExecOptions::default())
             .await
             .unwrap();
         assert_eq!(result, serde_json::Value::Null);
 
         let result: serde_json::Value = worker
-            .exec("test", "explicitUndefined", (), ExecOptions::default())
+            .exec("test", "explicitUndefined", &(), ExecOptions::default())
             .await
             .unwrap();
         assert_eq!(result, serde_json::Value::Null);
 
         let result: serde_json::Value = worker
-            .exec("test", "explicitNull", (), ExecOptions::default())
+            .exec("test", "explicitNull", &(), ExecOptions::default())
             .await
             .unwrap();
         assert_eq!(result, serde_json::Value::Null);
 
         let result: Option<i32> = worker
-            .exec("test", "noReturn", (), ExecOptions::default())
+            .exec("test", "noReturn", &(), ExecOptions::default())
             .await
             .unwrap();
         assert_eq!(result, None);
 
         let result: Result<String, RuntimeError> = worker
-            .exec("test", "noReturn", (), ExecOptions::default())
+            .exec("test", "noReturn", &(), ExecOptions::default())
             .await;
         assert!(result.is_err());
 
         let result: Result<i32, RuntimeError> = worker
-            .exec("test", "noReturn", (), ExecOptions::default())
+            .exec("test", "noReturn", &(), ExecOptions::default())
             .await;
         assert!(result.is_err());
     }
@@ -718,7 +718,7 @@ mod tests {
 
         // Case 1: No ExecOptions timeout - uses worker timeout (5 seconds)
         let result: String = worker
-            .exec("slow", "slowCode", 100, ExecOptions::default())
+            .exec("slow", "slowCode", &100, ExecOptions::default())
             .await
             .unwrap();
         assert_eq!(result, "completed");
@@ -728,7 +728,7 @@ mod tests {
             .exec(
                 "slow",
                 "slowCode",
-                200,
+                &200,
                 ExecOptions::default().with_timeout(Duration::from_millis(50)),
             )
             .await;
@@ -739,7 +739,7 @@ mod tests {
             .exec(
                 "slow",
                 "slowCode",
-                1000,
+                &1000,
                 ExecOptions::default().with_timeout(Duration::from_secs(3)),
             )
             .await

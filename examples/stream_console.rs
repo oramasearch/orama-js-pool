@@ -42,7 +42,7 @@ async fn main() -> Result<(), RuntimeError> {
         .exec(
             "logger",        // module name
             "log_and_error", // function name
-            input.clone(),
+            &input,
             ExecOptions::new()
                 .with_timeout(Duration::from_millis(500))
                 .with_stdout_sender(Arc::new(sender)),

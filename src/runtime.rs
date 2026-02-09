@@ -370,13 +370,13 @@ impl Runtime {
 
     /// Execute a function with the given parameters in a specific module
     pub async fn exec<
-        Input: TryIntoFunctionParameters + Send,
+        Input: TryIntoFunctionParameters + Send + Sync + ?Sized,
         Output: DeserializeOwned + Send + 'static,
     >(
         &mut self,
         module_name: &str,
         function_name: String,
-        params: Input,
+        params: &Input,
         stdout_sender: Option<Arc<tokio::sync::broadcast::Sender<(OutputChannel, String)>>>,
         domain_permission: DomainPermission,
         timeout: Duration,

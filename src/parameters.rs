@@ -15,7 +15,7 @@ impl FunctionParameters {
         Self(vec![])
     }
 
-    pub fn push<T: TryIntoFunctionParameters>(&mut self, value: T) -> Result<(), RuntimeError> {
+    pub fn push<T: TryIntoFunctionParameters>(&mut self, value: &T) -> Result<(), RuntimeError> {
         self.0.extend(value.try_into_function_parameter()?.0);
         Ok(())
     }
@@ -26,14 +26,14 @@ impl FunctionParameters {
 }
 
 pub trait TryIntoFunctionParameters {
-    fn try_into_function_parameter(self) -> Result<FunctionParameters, RuntimeError>;
+    fn try_into_function_parameter(&self) -> Result<FunctionParameters, RuntimeError>;
 }
 
 impl<T> TryIntoFunctionParameters for T
 where
-    T: Serialize,
+    T: Serialize + ?Sized,
 {
-    fn try_into_function_parameter(self) -> Result<FunctionParameters, RuntimeError> {
+    fn try_into_function_parameter(&self) -> Result<FunctionParameters, RuntimeError> {
         let mut v: serde_json::Value = serde_json::to_value(self)?;
 
         if v.is_array() {
