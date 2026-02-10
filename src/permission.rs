@@ -3,7 +3,7 @@ use deno_io::fs::FsError;
 use deno_net::NetPermissions;
 use deno_permissions::PermissionDeniedError;
 use deno_web::TimersPermission;
-use globset::Glob;
+use globset::GlobBuilder;
 use tracing::info;
 
 pub const DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING: &str = "Domain not allowed";
@@ -23,27 +23,39 @@ pub struct CustomPermissions {
     pub domain_permission: DomainPermission,
 }
 
-/// Check if a domain matches any pattern in the list using glob patterns.
-/// Supports wildcard patterns using '*' for IP addresses and domains.
+fn glob_match(value: &str, pattern: &str) -> bool {
+    if !pattern.contains(&['*', '?', '[', ']', '{', '}'][..]) {
+        return value.eq_ignore_ascii_case(pattern);
+    }
+    // Replace '.' with '/' so literal_separator prevents '*' from crossing domain labels
+    let value = value.replace('.', "/");
+    let pattern = pattern.replace('.', "/");
+    match GlobBuilder::new(&pattern)
+        .literal_separator(true)
+        .case_insensitive(true)
+        .build()
+    {
+        Ok(glob) => glob.compile_matcher().is_match(value.as_str()),
+        Err(_) => value.eq_ignore_ascii_case(&pattern),
+    }
+}
+
+/// Check if a domain matches a pattern using glob patterns following RFC 6125.
 /// Examples:
+/// - "localhost" matches "localhost:3000"
 /// - "10.0.0.*" matches "10.0.0.1", "10.0.0.255", etc.
-/// - "192.168.*.*" matches "192.168.1.1", "192.168.0.255", etc.
 /// - "*.example.com" matches "api.example.com", "www.example.com", etc.
 fn matches_pattern(domain: &str, pattern: &str) -> bool {
-    // Fast path: if no glob special chars, do exact match
-    if !pattern.contains(&['*', '?', '[', ']', '{', '}'][..]) {
-        return domain == pattern;
+    if glob_match(domain, pattern) {
+        return true;
     }
-
-    // Use globset for pattern matching
-    // Note: globset uses Unix-style glob patterns
-    match Glob::new(pattern) {
-        Ok(glob) => {
-            let matcher = glob.compile_matcher();
-            matcher.is_match(domain)
+    // Strip :port suffix and retry matching against host only
+    if let Some((host, port)) = domain.rsplit_once(':') {
+        if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) {
+            return glob_match(host, pattern);
         }
-        Err(_) => domain == pattern,
     }
+    false
 }
 
 /// Check if domain matches any pattern in the list
@@ -221,12 +233,27 @@ mod tests {
         assert!(matches_pattern("10.0.0.1:8080", "10.0.0.*:8080"));
         assert!(!matches_pattern("10.0.0.1:8080", "10.0.0.*:9090"));
 
-        assert!(matches_pattern("172.16.0.1", "172.1[6-9].*"));
-        assert!(matches_pattern("172.17.5.10", "172.1[6-9].*"));
-        assert!(matches_pattern("172.18.100.200", "172.1[6-9].*"));
-        assert!(matches_pattern("172.19.255.255", "172.1[6-9].*"));
-        assert!(!matches_pattern("172.15.0.1", "172.1[6-9].*"));
-        assert!(!matches_pattern("172.20.0.1", "172.1[6-9].*"));
+        assert!(matches_pattern("172.16.0.1", "172.1[6-9].*.*"));
+        assert!(matches_pattern("172.17.5.10", "172.1[6-9].*.*"));
+        assert!(matches_pattern("172.18.100.200", "172.1[6-9].*.*"));
+        assert!(matches_pattern("172.19.255.255", "172.1[6-9].*.*"));
+        assert!(!matches_pattern("172.15.0.1", "172.1[6-9].*.*"));
+        assert!(!matches_pattern("172.20.0.1", "172.1[6-9].*.*"));
+
+        assert!(matches_pattern("localhost", "localhost"));
+        assert!(matches_pattern("localhost:3000", "localhost"));
+        assert!(matches_pattern("example.org", "example.org"));
+        assert!(matches_pattern("example.org:3000", "example.org"));
+
+        // RFC 6125 Section 6.4.1: case-insensitive matching
+        assert!(matches_pattern("Example.COM", "example.com"));
+        assert!(matches_pattern("EXAMPLE.COM", "example.com"));
+        assert!(matches_pattern("example.com", "EXAMPLE.COM"));
+        assert!(matches_pattern("Api.Example.Com", "*.example.com"));
+
+        // RFC 6125 Section 6.4.3: wildcard must not cross domain labels
+        assert!(matches_pattern("foo.example.com", "*.example.com"));
+        assert!(!matches_pattern("bar.foo.example.com", "*.example.com"));
     }
 
     #[test]
