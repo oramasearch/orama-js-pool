@@ -4,7 +4,7 @@ use deno_net::NetPermissions;
 use deno_permissions::PermissionDeniedError;
 use deno_web::TimersPermission;
 use globset::Glob;
-use tracing::trace;
+use tracing::info;
 
 pub const DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING: &str = "Domain not allowed";
 
@@ -136,7 +136,7 @@ impl FetchPermissions for CustomPermissions {
             None => host.to_string(),
         };
 
-        trace!(
+        info!(
             domain = %domain,
             scheme = %url.scheme(),
             "Network request to domain"
