@@ -55,7 +55,10 @@ impl Pool {
                 RecyclePolicy::OnTimeout => {
                     matches!(err, RuntimeError::ExecTimeout)
                 }
-                RecyclePolicy::OnError => !matches!(err, RuntimeError::NetworkPermissionDenied(_)),
+                RecyclePolicy::OnError => !matches!(
+                    err,
+                    RuntimeError::ExecTimeout | RuntimeError::NetworkPermissionDenied(_)
+                ),
                 RecyclePolicy::OnTimeoutOrError => {
                     matches!(err, RuntimeError::ExecTimeout)
                         || !matches!(err, RuntimeError::NetworkPermissionDenied(_))
