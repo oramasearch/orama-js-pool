@@ -172,7 +172,7 @@ impl FetchPermissions for CustomPermissions {
                     Err(deno_permissions::PermissionCheckError::PermissionDenied(
                         PermissionDeniedError::Fatal {
                             access: format!(
-                                "{DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING}: {url}. Allowed domains: {allowed_list:?}"
+                                "{DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING}: {url}."
                             ),
                         },
                     ))
@@ -183,7 +183,7 @@ impl FetchPermissions for CustomPermissions {
                     Err(deno_permissions::PermissionCheckError::PermissionDenied(
                         PermissionDeniedError::Fatal {
                             access: format!(
-                                "{DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING}: {url}. Domain is in deny list: {denied_list:?}"
+                                "{DOMAIN_NOT_ALLOWED_ERROR_MESSAGE_SUBSTRING}: {url}"
                             ),
                         },
                     ))

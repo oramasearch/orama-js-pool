@@ -804,8 +804,8 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            matches!(err, RuntimeError::NetworkPermissionDenied(ref msg) if msg.contains("Allowed domains")),
-            "Expected NetworkPermissionDenied with 'Allowed domains' message, got: {err:?}"
+            matches!(err, RuntimeError::NetworkPermissionDenied(ref msg) if msg.contains("Domain not allowed")),
+            "Expected NetworkPermissionDenied with 'Domain not allowed' message, got: {err:?}"
         );
 
         let result: Result<String, RuntimeError> = pool
@@ -906,8 +906,8 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            matches!(err, RuntimeError::NetworkPermissionDenied(ref msg) if msg.contains("deny list")),
-            "Expected NetworkPermissionDenied with 'deny list' message, got: {err:?}"
+            matches!(err, RuntimeError::NetworkPermissionDenied(ref msg) if msg.contains("Domain not allowed")),
+            "Expected NetworkPermissionDenied with 'Domain not allowed' message, got: {err:?}"
         );
 
         let result: Result<String, RuntimeError> = pool
