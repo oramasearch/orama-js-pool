@@ -30,11 +30,6 @@ pub struct CustomPermissions {
 /// - "192.168.*.*" matches "192.168.1.1", "192.168.0.255", etc.
 /// - "*.example.com" matches "api.example.com", "www.example.com", etc.
 fn matches_pattern(domain: &str, pattern: &str) -> bool {
-    // If no wildcard, do exact match
-    if !pattern.contains('*') {
-        return domain == pattern;
-    }
-
     // Use globset for pattern matching
     // Note: globset uses Unix-style glob patterns
     match Glob::new(pattern) {
@@ -204,6 +199,7 @@ mod tests {
     #[test]
     fn test_pattern_matching() {
         assert!(matches_pattern("example.com", "example.com"));
+        assert!(matches_pattern("224.0.0.1", "22*.*.*.*"));
         assert!(!matches_pattern("example.com", "other.com"));
 
         assert!(matches_pattern("10.0.0.1", "10.0.0.*"));
@@ -219,6 +215,13 @@ mod tests {
 
         assert!(matches_pattern("10.0.0.1:8080", "10.0.0.*:8080"));
         assert!(!matches_pattern("10.0.0.1:8080", "10.0.0.*:9090"));
+
+        assert!(matches_pattern("172.16.0.1", "172.1[6-9].*"));
+        assert!(matches_pattern("172.17.5.10", "172.1[6-9].*"));
+        assert!(matches_pattern("172.18.100.200", "172.1[6-9].*"));
+        assert!(matches_pattern("172.19.255.255", "172.1[6-9].*"));
+        assert!(!matches_pattern("172.15.0.1", "172.1[6-9].*"));
+        assert!(!matches_pattern("172.20.0.1", "172.1[6-9].*"));
     }
 
     #[test]
