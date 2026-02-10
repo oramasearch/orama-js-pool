@@ -30,6 +30,11 @@ pub struct CustomPermissions {
 /// - "192.168.*.*" matches "192.168.1.1", "192.168.0.255", etc.
 /// - "*.example.com" matches "api.example.com", "www.example.com", etc.
 fn matches_pattern(domain: &str, pattern: &str) -> bool {
+    // Fast path: if no glob special chars, do exact match
+    if !pattern.contains(&['*', '?', '[', ']', '{', '}'][..]) {
+        return domain == pattern;
+    }
+
     // Use globset for pattern matching
     // Note: globset uses Unix-style glob patterns
     match Glob::new(pattern) {
